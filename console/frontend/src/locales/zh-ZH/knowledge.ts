@@ -25,6 +25,29 @@ const translation = {
   xinghuoKnowledge: '星火知识库',
   xingpuDescription:
     '可整合多源异构知识数据自动采编，提供问答式检索，支持答案追溯，适用于企业场景。',
+  volcengineShort: '火山',
+  volcengineKnowledge: '火山引擎知识库',
+  volcengineKnowledgeDescription:
+    '关联火山引擎控制台中已创建的知识库，文档在火山引擎上传、解析和切片，这里负责检索调用，详见 ',
+  volcengineNotConfigured: '未配置',
+  volcengineKeyNotConfigured: '知识库 API Key 未配置',
+  volcengineConfigHint:
+    '火山知识库名称或 ID 与 API Key 在「平台账号管理 - 火山引擎（字节）」中配置。',
+  volcengineGoConfig: '去配置',
+  volcengineDocsTitle: '火山引擎文档',
+  volcengineDocsHint:
+    '这个知识库的文档在火山引擎上传、解析和管理，这里只读展示。新增或修改文档请前往火山引擎控制台，处理完成后即可在命中测试和智能体中使用。',
+  volcengineOpenConsole: '前往火山引擎控制台',
+  volcengineDocName: '文档名称',
+  volcengineDocType: '类型',
+  volcengineDocChunks: '切片数',
+  volcengineDocStatus: '状态',
+  volcengineDocUpdated: '更新时间',
+  volcengineDocProcessed: '已处理',
+  volcengineDocProcessing: '处理中',
+  volcengineDocFailed: '处理失败',
+  volcengineDocsTotal: '共 {{total}} 个文档',
+  volcengineBoundTo: '关联知识库',
   xingchenKnowledge: '星辰知识库',
   xingchenDescription:
     '可整合多源异构知识数据自动采编，提供问答式检索，支持答案追溯，适用于轻量检索场景。',

@@ -33,6 +33,7 @@ class CodeEnum(Enum):
     AIUI_RAGError = (10027, "AIUI knowledge base request failed")
     DESK_RAGError = (10028, "DESK knowledge base request failed")
     RAGFLOW_RAGError = (10029, "RAGFlow knowledge base request failed")
+    VOLCENGINE_RAGError = (10030, "Volcengine knowledge base request failed")
 
     ThirdPartyServiceFailed = (11111, "Third Party Service Failed")
     ServiceException = (14999, "Service Exception")

@@ -49,6 +49,7 @@ const transition = {
     clearChatHistoryFailed: '清空聊天记录失败',
     confirm: '确认',
     cancel: '取消',
+    aiGeneratedNotice: '内容由 AI 生成，可能存在错误，请注意甄别',
     answeringInProgress: '正在回答中...',
     uploadingInProgress: '正在上传中...',
     stopFailed: '停止失败！',
@@ -104,6 +105,7 @@ const transition = {
   deepThinkProgress: {
     title: '思考和行动过程',
     endTip: '思考完成，以下是为您生成的答案',
+    stoppedTip: '已停止输出',
   },
   MathThinkProgress: {
     thinking: '正在思考中',

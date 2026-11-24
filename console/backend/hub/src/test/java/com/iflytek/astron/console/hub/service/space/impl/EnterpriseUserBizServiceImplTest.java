@@ -250,6 +250,41 @@ class EnterpriseUserBizServiceImplTest {
             assertEquals(ResponseEnum.SUCCESS.getCode(), result.code());
             assertEquals(newRole, testEnterpriseUser.getRole());
             verify(enterpriseUserService).updateById(testEnterpriseUser);
+            verify(enterpriseSpaceService).clearEnterpriseUserCache(TEST_ENTERPRISE_ID, TEST_UID);
+        }
+    }
+
+    @Test
+    @DisplayName("updateRole - Should reject granting the super admin role")
+    void updateRole_Error_WhenGrantingSuperAdmin() {
+        try (MockedStatic<EnterpriseInfoUtil> mockedEnterpriseInfo = mockStatic(EnterpriseInfoUtil.class)) {
+            mockedEnterpriseInfo.when(EnterpriseInfoUtil::getEnterpriseId).thenReturn(TEST_ENTERPRISE_ID);
+            when(enterpriseUserService.getEnterpriseUserByUid(TEST_ENTERPRISE_ID, TEST_UID))
+                    .thenReturn(testEnterpriseUser);
+            Integer originalRole = testEnterpriseUser.getRole();
+
+            ApiResult<String> result = enterpriseUserBizService.updateRole(TEST_UID, EnterpriseRoleEnum.OFFICER.getCode());
+
+            assertEquals(ResponseEnum.ENTERPRISE_TEAM_ROLE_TYPE_INCORRECT.getCode(), result.code());
+            assertEquals(originalRole, testEnterpriseUser.getRole());
+            verify(enterpriseUserService, never()).updateById(any());
+        }
+    }
+
+    @Test
+    @DisplayName("updateRole - Should reject changing the super admin's role")
+    void updateRole_Error_WhenTargetIsSuperAdmin() {
+        try (MockedStatic<EnterpriseInfoUtil> mockedEnterpriseInfo = mockStatic(EnterpriseInfoUtil.class)) {
+            testEnterpriseUser.setRole(EnterpriseRoleEnum.OFFICER.getCode());
+            mockedEnterpriseInfo.when(EnterpriseInfoUtil::getEnterpriseId).thenReturn(TEST_ENTERPRISE_ID);
+            when(enterpriseUserService.getEnterpriseUserByUid(TEST_ENTERPRISE_ID, TEST_UID))
+                    .thenReturn(testEnterpriseUser);
+
+            ApiResult<String> result = enterpriseUserBizService.updateRole(TEST_UID, EnterpriseRoleEnum.STAFF.getCode());
+
+            assertEquals(ResponseEnum.ENTERPRISE_TEAM_SUPER_ADMIN_ROLE_CANNOT_BE_CHANGED.getCode(), result.code());
+            assertEquals(EnterpriseRoleEnum.OFFICER.getCode(), testEnterpriseUser.getRole());
+            verify(enterpriseUserService, never()).updateById(any());
         }
     }
 

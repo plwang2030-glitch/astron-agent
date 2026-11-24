@@ -43,6 +43,7 @@ dependencies = [
     "toml>=0.10.2",
     "typing-extensions>=4.15.0",
     "uvicorn~=0.34.2",
+    "vikingdb-python-sdk==0.1.36",
     "websocket-client==1.8.0",
 ]
 

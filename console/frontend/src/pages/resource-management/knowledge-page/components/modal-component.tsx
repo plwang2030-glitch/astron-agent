@@ -1,8 +1,9 @@
-import React, { useState, useRef, FC } from 'react';
+import React, { useState, useRef, useEffect, FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Form, Input, message } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { createKnowledgeAPI, deleteKnowledgeAPI } from '@/services/knowledge';
+import { getPlatformAccountRuntimeConfig } from '@/services/platform-account';
 
 import dialogDel from '@/assets/imgs/main/icon_dialog_del.png';
 import knowledgeVersionChecked from '@/assets/imgs/knowledge/knowledge_version_checked.svg';
@@ -10,7 +11,11 @@ import { RepoItem } from '../../../../types/resource';
 
 const { TextArea } = Input;
 
-export type VersionType = 'AIUI-RAG2' | 'CBG-RAG' | 'Ragflow-RAG';
+export type VersionType =
+  | 'AIUI-RAG2'
+  | 'CBG-RAG'
+  | 'Ragflow-RAG'
+  | 'Volcengine-RAG';
 export const versionList: {
   type: VersionType;
   title: string;
@@ -32,6 +37,12 @@ export const versionList: {
     type: 'CBG-RAG',
     title: 'xinghuoKnowledge',
     description: 'xingpuDescription',
+  },
+  {
+    type: 'Volcengine-RAG',
+    title: 'volcengineKnowledge',
+    description: 'volcengineKnowledgeDescription',
+    link: 'https://console.volcengine.com/vikingdb/knowledge',
   },
 ];
 
@@ -108,6 +119,30 @@ export const CreateModal: FC<{ setCreateModal: (value: boolean) => void }> = ({
   const [desc, setDesc] = useState('');
   const [version, setVersion] = useState<VersionType>('Ragflow-RAG');
   const [loading, setLoading] = useState(false);
+  // Volcengine-RAG binds the knowledge base configured under 平台账号管理 - 火山引擎（字节）.
+  const [volcConfig, setVolcConfig] = useState<{
+    loaded: boolean;
+    keyConfigured: boolean;
+    collection: string;
+  }>({ loaded: false, keyConfigured: false, collection: '' });
+  const isVolcengine = version === 'Volcengine-RAG';
+  const volcReady =
+    volcConfig.loaded && volcConfig.keyConfigured && !!volcConfig.collection;
+
+  useEffect(() => {
+    if (!isVolcengine) return;
+    getPlatformAccountRuntimeConfig()
+      .then(config =>
+        setVolcConfig({
+          loaded: true,
+          keyConfigured: !!config?.volcengineKnowledgeConfigured,
+          collection: config?.volcengineKnowledgeCollection || '',
+        })
+      )
+      .catch(() =>
+        setVolcConfig({ loaded: true, keyConfigured: false, collection: '' })
+      );
+  }, [isVolcengine]);
 
   function handleOk(): void {
     setLoading(true);
@@ -120,7 +155,10 @@ export const CreateModal: FC<{ setCreateModal: (value: boolean) => void }> = ({
     createKnowledgeAPI(params)
       .then(data => {
         navigate(
-          `/resource/knowledge/upload?parentId=-1&repoId=${data.id}&tag=${version}`
+          isVolcengine
+            ? `/resource/knowledge/detail/${data.id}/document?tag=${version}`
+            : `/resource/knowledge/upload?parentId=-1&repoId=${data.id}&tag=${version}`,
+          isVolcengine ? { state: { parentId: -1 } } : undefined
         );
       })
       .finally(() => {
@@ -206,10 +244,43 @@ export const CreateModal: FC<{ setCreateModal: (value: boolean) => void }> = ({
             ))}
           </div>
         </div>
+        {isVolcengine && (
+          <div
+            className="mt-4 flex flex-col gap-1 rounded-lg bg-[#F7F8FC] px-3 py-2.5 text-sm"
+            data-testid="volcengine-bind-info"
+          >
+            <div className="text-second font-medium">
+              {t('knowledge.volcengineBoundTo')}：
+              {volcConfig.collection ? (
+                <code className="ml-1">{volcConfig.collection}</code>
+              ) : (
+                <span className="ml-1 text-[#F74E43]">
+                  {volcConfig.loaded
+                    ? t('knowledge.volcengineNotConfigured')
+                    : '…'}
+                </span>
+              )}
+            </div>
+            {volcConfig.loaded && !volcConfig.keyConfigured && (
+              <div className="text-xs text-[#F74E43]">
+                {t('knowledge.volcengineKeyNotConfigured')}
+              </div>
+            )}
+            <div className="text-xs text-desc leading-5">
+              {t('knowledge.volcengineConfigHint')}
+              <a
+                className="ml-1 text-[#6356EA]"
+                onClick={() => navigate('/management/platform-account')}
+              >
+                {t('knowledge.volcengineGoConfig')}
+              </a>
+            </div>
+          </div>
+        )}
         <div className="flex flex-row-reverse gap-3 mt-7">
           <Button
             type="primary"
-            disabled={disabledSave}
+            disabled={disabledSave || (isVolcengine && !volcReady)}
             loading={loading}
             className="px-6"
             onClick={handleOk}

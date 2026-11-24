@@ -21,6 +21,7 @@ import com.iflytek.astron.console.commons.util.space.SpaceInfoUtil;
 import com.iflytek.astron.console.hub.dto.bot.BotGenerationDTO;
 import com.iflytek.astron.console.hub.service.bot.BotAIService;
 import com.iflytek.astron.console.hub.service.bot.PersonalityConfigService;
+import com.iflytek.astron.console.hub.service.chat.springai.SubAgentPreparer;
 import com.iflytek.astron.console.hub.util.BotPermissionUtil;
 import com.iflytek.astron.console.toolkit.service.model.LLMService;
 import com.iflytek.astron.console.toolkit.service.repo.MassDatasetInfoService;
@@ -78,6 +79,21 @@ public class BotCreateController {
     @Autowired
     private AgentWorkflowRuntimeService agentWorkflowRuntimeService;
 
+    @Autowired
+    private SubAgentPreparer subAgentPreparer;
+
+    private List<Integer> extractAgentBotIds(BotCreateForm bot) {
+        if (bot.getAgents() == null) {
+            return Collections.emptyList();
+        }
+        return bot.getAgents()
+                .stream()
+                .filter(agent -> agent != null && agent.getBotId() != null)
+                .map(BotCreateForm.BotAgent::getBotId)
+                .distinct()
+                .toList();
+    }
+
     private List<String> extractToolIds(BotCreateForm bot) {
         if (bot.getTools() == null) {
             return Collections.emptyList();
@@ -128,6 +144,11 @@ public class BotCreateController {
         // Validate workflow ownership: only own / same-space workflows can be imported
         if (!agentWorkflowRuntimeService.checkWorkflowsAccessible(uid, spaceId, extractWorkflowFlowIds(bot))) {
             return ApiResult.error(ResponseEnum.BOT_BELONG_ERROR);
+        }
+        // Sub-agents must be agents of the same owner / space
+        ResponseEnum agentError = subAgentPreparer.validateAgents(uid, spaceId, extractAgentBotIds(bot), null);
+        if (agentError != null) {
+            return ApiResult.error(agentError);
         }
         if (Boolean.TRUE.equals(bot.getEnablePersonality()) && personalityConfigService.checkPersonalityConfig(bot.getPersonalityConfig())) {
             return ApiResult.error(ResponseEnum.CREATE_BOT_FAILED);
@@ -288,6 +309,11 @@ public class BotCreateController {
         if (!agentWorkflowRuntimeService.checkWorkflowsAccessible(uid, spaceId, extractWorkflowFlowIds(bot))) {
             return ApiResult.error(ResponseEnum.BOT_BELONG_ERROR);
         }
+        // Sub-agents must be agents of the same owner / space, and not the bot itself
+        ResponseEnum agentError = subAgentPreparer.validateAgents(uid, spaceId, extractAgentBotIds(bot), bot.getBotId());
+        if (agentError != null) {
+            return ApiResult.error(agentError);
+        }
         boolean selfDocumentExist = (datasetList != null && !datasetList.isEmpty());
         boolean maasDocumentExist = (maasDatasetList != null && !maasDatasetList.isEmpty());
         int supportDocument = (selfDocumentExist || maasDocumentExist) ? 1 : 0;
@@ -315,6 +341,27 @@ public class BotCreateController {
      * @param request HTTP request object
      * @return API result containing all model lists
      */
+    /**
+     * Agents that can be attached as sub-agents of {@code botId} (the 能力 page picker). Agents that
+     * already route to other agents, and the agent itself, are listed but not selectable.
+     */
+    @Operation(summary = "List sub-agent candidates")
+    @GetMapping("/agent-candidates")
+    public ApiResult<SubAgentPreparer.CandidateList> agentCandidates(@RequestParam(required = false) Integer botId) {
+        String uid = RequestContextUtil.getUID();
+        Long spaceId = SpaceInfoUtil.getSpaceId();
+        // Not covered by @SpacePreAuth: check membership here, otherwise any space's agents could be
+        // listed.
+        if (spaceId != null && !SpaceInfoUtil.checkUserBelongSpace()) {
+            log.warn("Reject sub-agent candidates from non-member, uid={}, spaceId={}", uid, spaceId);
+            return ApiResult.error(ResponseEnum.PERMISSION_NOT_BELONG_SPACE);
+        }
+        if (botId != null) {
+            botPermissionUtil.checkBot(botId);
+        }
+        return ApiResult.success(subAgentPreparer.listCandidates(uid, spaceId, botId));
+    }
+
     @Operation(summary = "Get bot model list", description = "Fetches both default and custom bot models")
     @GetMapping("/bot-model")
     public ApiResult<List<BotModelDto>> botModel(HttpServletRequest request) {

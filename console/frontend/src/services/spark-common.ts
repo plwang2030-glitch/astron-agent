@@ -1,4 +1,4 @@
-import http from '../utils/http';
+import http, { AI_GENERATE_TIMEOUT } from '../utils/http';
 import qs from 'qs';
 import { Base64 } from 'js-base64';
 import { VCNTrainingText } from '@/components/speaker-modal/voice-training';
@@ -49,7 +49,9 @@ export const modifyNickname = (params: any): Promise<any> => {
 
 // ai生成助手封面图
 export const aiGenerateCover = (params: any): Promise<any> => {
-  return http.post(`/bot/ai-avatar-gen `, params);
+  return http.post(`/bot/ai-avatar-gen`, params, {
+    timeout: AI_GENERATE_TIMEOUT,
+  });
 };
 
 export interface ModelListData {
@@ -320,6 +322,7 @@ export const quickCreateBot = (str: string) => {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: AI_GENERATE_TIMEOUT,
   });
 };
 

@@ -188,7 +188,11 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
         ChatBotBase chatBot = new ChatBotBase();
         chatBot.setId(botId);
         chatBot.setIsDelete(1);
-        return chatBotBaseMapper.updateById(chatBot) > 0;
+        boolean deleted = chatBotBaseMapper.updateById(chatBot) > 0;
+        if (deleted) {
+            removeAgentReferences(List.of(botId));
+        }
+        return deleted;
     }
 
     @Override
@@ -197,6 +201,9 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
         boolean botListDeleted = deleteChatBotList(botId, uid);
         boolean chatListDeleted = deleteChatList(botId, uid);
         boolean marketDeleted = deleteChatBotMarket(botId, uid);
+        if (baseDeleted) {
+            removeAgentReferences(List.of(botId));
+        }
 
         if (!botListDeleted) {
             log.info("No active chat_bot_list rows updated during bot deletion, botId={}, uid={}", botId, uid);
@@ -209,6 +216,47 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
         }
 
         return baseDeleted;
+    }
+
+    /**
+     * Removes deleted agents from other agents' {@code agents} lists, so those agents keep saving and
+     * the picker does not show dead references. Never fails the deletion; problems are only logged.
+     */
+    private void removeAgentReferences(Collection<Integer> deletedIds) {
+        if (deletedIds == null || deletedIds.isEmpty()) {
+            return;
+        }
+        try {
+            Set<Integer> deleted = new HashSet<>(deletedIds);
+            LambdaQueryWrapper<ChatBotBase> query = Wrappers.lambdaQuery(ChatBotBase.class)
+                    .select(ChatBotBase::getId, ChatBotBase::getAgents)
+                    .eq(ChatBotBase::getIsDelete, 0)
+                    // Only agents that reference others; exact ids are compared after parsing, so the
+                    // JSON formatting does not matter.
+                    .like(ChatBotBase::getAgents, "botId");
+            List<ChatBotBase> refs = chatBotBaseMapper.selectList(query);
+            log.debug("Checking agent references, deleted={}, candidates={}", deleted, refs.size());
+            for (ChatBotBase ref : refs) {
+                com.alibaba.fastjson2.JSONArray agents = com.alibaba.fastjson2.JSON.parseArray(ref.getAgents());
+                if (agents == null) {
+                    continue;
+                }
+                boolean changed = agents.removeIf(item -> item instanceof JSONObject json
+                        && deleted.contains(json.getInteger("botId")));
+                if (!changed) {
+                    continue;
+                }
+                chatBotBaseMapper.update(null, Wrappers.lambdaUpdate(ChatBotBase.class)
+                        .eq(ChatBotBase::getId, ref.getId())
+                        .set(ChatBotBase::getAgents, agents.toJSONString())
+                        // Not an edit by the owner: keep its update time (list order, 更新时间).
+                        .setSql("update_time = update_time"));
+                log.info("Removed deleted agents from references, botId={}, deleted={}", ref.getId(), deleted);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to remove agent references, deleted={}, errorType={}, msg={}", deletedIds,
+                    e.getClass().getSimpleName(), e.getMessage());
+        }
     }
 
     private boolean deleteChatBotBase(Integer botId, String uid) {
@@ -257,6 +305,7 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
             deactivateChatBotListByBotIds(List.of(botId));
             deleteChatListByBotIds(List.of(botId));
             deleteChatBotMarketByBotIds(List.of(botId));
+            removeAgentReferences(List.of(botId));
         }
         return baseDeleted;
     }
@@ -278,6 +327,7 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
             deactivateChatBotListByBotIds(botIds);
             deleteChatListByBotIds(botIds);
             deleteChatBotMarketByBotIds(botIds);
+            removeAgentReferences(botIds);
         }
         return baseDeleted;
     }
@@ -300,6 +350,7 @@ public class ChatBotDataServiceImpl implements ChatBotDataService {
             deactivateChatBotListByBotIds(botIds);
             deleteChatListByBotIds(botIds);
             deleteChatBotMarketByBotIds(botIds);
+            removeAgentReferences(botIds);
         }
         return baseDeleted;
     }

@@ -85,14 +85,27 @@ public class EnterpriseUserBizServiceImpl implements EnterpriseUserBizService {
         if (enterpriseUser == null) {
             return ApiResult.error(ResponseEnum.ENTERPRISE_TEAM_USER_NOT_IN_TEAM);
         }
+        // The super admin is the enterprise owner. This endpoint is also open to admins
+        // (GOVERNOR), so it must neither demote the owner nor grant ownership to anyone.
+        if (Objects.equals(enterpriseUser.getRole(), EnterpriseRoleEnum.OFFICER.getCode())) {
+            log.warn("Rejected role change of enterprise super admin, enterpriseId={}, targetUid={}",
+                    enterpriseId, uid);
+            return ApiResult.error(ResponseEnum.ENTERPRISE_TEAM_SUPER_ADMIN_ROLE_CANNOT_BE_CHANGED);
+        }
         EnterpriseRoleEnum roleEnum = EnterpriseRoleEnum.getByCode(role);
-        if (roleEnum == null) {
+        if (roleEnum == null || roleEnum == EnterpriseRoleEnum.OFFICER) {
+            if (roleEnum == EnterpriseRoleEnum.OFFICER) {
+                log.warn("Rejected grant of enterprise super admin role, enterpriseId={}, targetUid={}",
+                        enterpriseId, uid);
+            }
             return ApiResult.error(ResponseEnum.ENTERPRISE_TEAM_ROLE_TYPE_INCORRECT);
         }
         enterpriseUser.setRole(role);
-        if (!enterpriseUserService.updateById(enterpriseUser)) {
-            // Clear cache
-            enterpriseSpaceService.clearEnterpriseUserCache(enterpriseId, uid);
+        boolean updated = enterpriseUserService.updateById(enterpriseUser);
+        // Permission checks read the membership through a cache; evict it so the new
+        // role (or the unchanged one on failure) is used by the next request.
+        enterpriseSpaceService.clearEnterpriseUserCache(enterpriseId, uid);
+        if (!updated) {
             return ApiResult.error(ResponseEnum.ENTERPRISE_TEAM_UPDATE_ROLE_FAILED);
         }
         return ApiResult.success();

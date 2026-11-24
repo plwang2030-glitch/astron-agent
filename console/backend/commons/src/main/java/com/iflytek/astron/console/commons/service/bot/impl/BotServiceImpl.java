@@ -400,6 +400,10 @@ public class BotServiceImpl implements BotService {
         botBase.setSkills(serializeSkills(bot.getSkills()));
         botBase.setTools(serializeTools(bot.getTools()));
         botBase.setWorkflows(serializeWorkflows(bot.getWorkflows()));
+        botBase.setAgents(serializeAgents(bot.getAgents()));
+        botBase.setAutoTeam(normalizeFlag(bot.getAutoTeam(), 0));
+        botBase.setDeepThinking(normalizeFlag(bot.getDeepThinking(), 1));
+        botBase.setBuiltinTools(serializeBuiltinTools(bot.getBuiltinTools()));
         botBase.setClientType(bot.getClientType());
         botBase.setBotNameEn(bot.getBotNameEn());
         botBase.setBotDescEn(bot.getBotDescEn());
@@ -482,6 +486,45 @@ public class BotServiceImpl implements BotService {
             workflow.setFlowId(workflow.getFlowId().trim());
             if (seenFlowIds.add(workflow.getFlowId())) {
                 valid.add(workflow);
+            }
+        }
+        return JSON.toJSONString(valid);
+    }
+
+    /** 0/1 flag; {@code fallback} when the form does not send it. */
+    private static Integer normalizeFlag(Integer value, Integer fallback) {
+        return value == null ? fallback : (value == 1 ? 1 : 0);
+    }
+
+    /** Known opt-in built-in tool groups; others are dropped. */
+    private static final Set<String> BUILTIN_TOOL_GROUPS = Set.of("a_share");
+
+    /** {@code null} (form did not send it) keeps the saved value; an empty list clears it. */
+    private String serializeBuiltinTools(List<String> groups) {
+        if (groups == null) {
+            return null;
+        }
+        return JSON.toJSONString(groups.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(BUILTIN_TOOL_GROUPS::contains)
+                .distinct()
+                .toList());
+    }
+
+    private String serializeAgents(List<BotCreateForm.BotAgent> agents) {
+        if (agents == null) {
+            return null;
+        }
+        Set<Integer> seen = new LinkedHashSet<>();
+        List<BotCreateForm.BotAgent> valid = new ArrayList<>();
+        for (BotCreateForm.BotAgent agent : agents) {
+            if (agent != null && agent.getBotId() != null && seen.add(agent.getBotId())) {
+                // Only an explicit true is kept, so existing configs stay byte-identical.
+                if (!Boolean.TRUE.equals(agent.getDirect())) {
+                    agent.setDirect(null);
+                }
+                valid.add(agent);
             }
         }
         return JSON.toJSONString(valid);
@@ -610,6 +653,10 @@ public class BotServiceImpl implements BotService {
                 .skills(serializeSkills(bot.getSkills()))
                 .tools(serializeTools(bot.getTools()))
                 .workflows(serializeWorkflows(bot.getWorkflows()))
+                .agents(serializeAgents(bot.getAgents()))
+                .autoTeam(normalizeFlag(bot.getAutoTeam(), null))
+                .deepThinking(normalizeFlag(bot.getDeepThinking(), null))
+                .builtinTools(serializeBuiltinTools(bot.getBuiltinTools()))
                 .clientType(bot.getClientType())
                 .botNameEn(bot.getBotNameEn())
                 .botDescEn(bot.getBotDescEn())

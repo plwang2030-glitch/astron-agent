@@ -525,7 +525,8 @@ public class RpaAssistantService {
                     (startReq.getExecPosition() == null || startReq.getExecPosition().isBlank()) ? "EXECUTOR" : startReq.getExecPosition());
             body.put("params", startReq.getParams() == null ? Map.of() : startReq.getParams());
             String reqBody = JacksonUtil.toJSONString(body, JacksonUtil.NON_NULL_OBJECT_MAPPER);
-            log.info("[SSE] rpa debug url={}, headers={}, reqBody={}", url, headerMap, reqBody);
+            // Headers are not logged: Authorization carries the user's RPA platform API key.
+            log.info("[SSE] rpa debug url={}, reqBody={}", url, reqBody);
 
             EventSourceListener listener = new EventSourceListener() {
                 @Override

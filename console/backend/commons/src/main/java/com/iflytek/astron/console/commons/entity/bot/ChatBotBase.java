@@ -130,6 +130,18 @@ public class ChatBotBase {
     @Schema(description = "Selected workflows (published) JSON list")
     private String workflows;
 
+    /** Attached sub-agents JSON ({@code [{"botId":1,"name":"..."}]}); exposed as call_agent tools. */
+    private String agents;
+
+    /** 1 = pick experts from the space's published agents per question (expert team). */
+    private Integer autoTeam;
+
+    /** 深度思考: 1 = model default (reasoning on), 0 = disabled where the provider supports it. */
+    private Integer deepThinking;
+
+    /** JSON array of opt-in built-in tool groups, e.g. {@code ["a_share"]}. */
+    private String builtinTools;
+
     @Schema(description = "Hidden on certain clients")
     private String clientHide;
 

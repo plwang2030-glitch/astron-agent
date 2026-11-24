@@ -49,6 +49,8 @@ const transition = {
     clearChatHistoryFailed: 'Failed to clear chat history',
     confirm: 'Confirm',
     cancel: 'Cancel',
+    aiGeneratedNotice:
+      'Content is AI-generated and may contain errors. Please verify it.',
     answeringInProgress: 'Answering in progress...',
     uploadingInProgress: 'Uploading in progress...',
     stopFailed: 'Stop failed!',
@@ -107,6 +109,7 @@ const transition = {
   deepThinkProgress: {
     title: 'Thinking and Action Process',
     endTip: 'Thinking complete, here is your answer',
+    stoppedTip: 'Output stopped',
   },
   MathThinkProgress: {
     thinking: 'Thinking in progress',

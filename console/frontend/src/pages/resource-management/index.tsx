@@ -18,6 +18,7 @@ const RpaDetail = React.lazy(() => import('./rpa-detail'));
 const SkillPage = React.lazy(() => import('./skill-page'));
 const AutomationPage = React.lazy(() => import('./automation-page'));
 const SandboxPage = React.lazy(() => import('./sandbox-page'));
+const WorkflowPage = React.lazy(() => import('./workflow-page'));
 
 function ResourceManagement(): JSX.Element {
   return (
@@ -44,6 +45,7 @@ function ResourceManagement(): JSX.Element {
           <Route path="/skill" element={<SkillPage />} />
           <Route path="/automation" element={<AutomationPage />} />
           <Route path="/sandbox" element={<SandboxPage />} />
+          <Route path="/workflow" element={<WorkflowPage />} />
         </Routes>
       </Suspense>
     </div>

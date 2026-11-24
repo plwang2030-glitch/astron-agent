@@ -147,7 +147,7 @@ const translation = {
     all: 'All',
     mostPopular: 'Most Popular',
     recentlyUsed: 'Recently Used',
-    xingchenAgentOfficial: 'Astra Agent Official',
+    xingchenAgentOfficial: 'SkyLumin Official',
     noPlugins: 'No Plugins',
     privacyStatement: 'Privacy Statement',
     developerStatement:

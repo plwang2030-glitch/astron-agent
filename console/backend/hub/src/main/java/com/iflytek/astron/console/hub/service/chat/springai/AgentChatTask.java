@@ -6,8 +6,11 @@ import com.iflytek.astron.console.commons.entity.chat.ChatReqRecords;
 import com.iflytek.astron.console.toolkit.entity.vo.LLMInfoVo;
 import lombok.Builder;
 import lombok.Data;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /** Normalized input for a single standalone-agent chat turn (formal / re-answer / debug). */
 @Data
@@ -50,4 +53,42 @@ public class AgentChatTask {
 
     private boolean edit;
     private boolean debug;
+
+    /**
+     * Extra caller-supplied tools (e.g. the agent builder's draft-editing tools), appended after the
+     * resolved bot tools. {@code null} for regular chat.
+     */
+    private List<ToolCallback> extraToolCallbacks;
+
+    /**
+     * Attached agents resolved on the request thread; each becomes a {@code call_agent_<botId>} tool.
+     * {@code null} or empty for none.
+     */
+    private List<PreparedSubAgent> subAgents;
+
+    /**
+     * When {@code true}, the always-on built-in tools (web_search / current_time) are not registered.
+     * Only {@link #extraToolCallbacks} and explicitly configured tools are exposed.
+     */
+    private boolean builtinToolsDisabled;
+
+    /**
+     * Run detached from the SSE response with a longer limit; the user is notified when it ends. Formal
+     * chat only (needs {@link #chatReqRecords} for the result to be saved).
+     */
+    private boolean background;
+
+    /** Provider-specific request body fields (e.g. Ark {@code thinking}); {@code null} for none. */
+    private Map<String, Object> extraBody;
+
+    /**
+     * The agent's 深度思考 switch; {@code null} or {@code true} keeps the model default. Fields already set
+     * in {@link #extraBody} win.
+     */
+    private Boolean deepThinking;
+
+    /** Opt-in built-in tool groups of the agent (e.g. {@code a_share}); {@code null} for none. */
+    private List<String> builtinTools;
+    /** Called with the final answer text after the stream completes normally. */
+    private Consumer<String> onComplete;
 }

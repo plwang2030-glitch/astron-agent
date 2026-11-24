@@ -1,14 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import {
-  Input,
-  Tooltip,
-  Switch,
-  Modal,
-  Button,
-  message,
-  Checkbox,
-  Spin,
-} from 'antd';
+import { Input, Tooltip, Switch, Modal, Button, message, Spin } from 'antd';
 import { typeList } from '@/constants';
 import {
   generateInputExample,
@@ -25,6 +16,7 @@ import Personality from './personality-component';
 import {
   ApiOutlined,
   CheckCircleOutlined,
+  StockOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
   LinkOutlined,
@@ -49,13 +41,13 @@ import { useTranslation } from 'react-i18next';
 
 import styles from './CapabilityDevelopment.module.scss';
 import cls from 'classnames';
-import { CheckboxChangeEvent } from 'antd/es/checkbox';
-import { isValidMcpServerUrl } from '../mcp-url-config';
+import { A_SHARE_TOOL_GROUP, isValidMcpServerUrl } from '../mcp-url-config';
 import SkillSelectModal from './SkillSelectModal';
 import PluginSelectModal from './PluginSelectModal';
-import WorkflowSelectModal from './WorkflowSelectModal';
+import SubAgentSection from './SubAgentSection';
 import type { AgentSkill } from '@/types/skill';
 import type { AgentWorkflow } from '@/types/agent-workflow';
+import type { AgentRef } from '@/types/agent-ref';
 
 const { TextArea } = Input;
 
@@ -78,8 +70,18 @@ interface CapabilityDevelopmentProps {
   setSupportContextFlag: (v: boolean) => void;
   tools: any[];
   setTools: (v: any[]) => void;
+  /** Legacy workflows: still run at chat time, can only be removed here. */
   workflows: AgentWorkflow[];
   setWorkflows: (v: AgentWorkflow[]) => void;
+  agents: AgentRef[];
+  setAgents: (v: AgentRef[]) => void;
+  autoTeam?: boolean;
+  setAutoTeam?: (v: boolean) => void;
+  /** Opt-in built-in tool groups, e.g. a_share. */
+  builtinTools?: string[];
+  setBuiltinTools?: (v: string[]) => void;
+  /** The agent being edited, excluded from the agent picker. */
+  currentBotId?: number;
   mcpServerUrls: string[];
   setMcpServerUrls: (v: string[]) => void;
   skills: AgentSkill[];
@@ -120,6 +122,13 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
     setTools,
     workflows,
     setWorkflows,
+    agents,
+    setAgents,
+    autoTeam,
+    setAutoTeam,
+    builtinTools = [],
+    setBuiltinTools,
+    currentBotId,
     mcpServerUrls,
     setMcpServerUrls,
     skills,
@@ -147,7 +156,6 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
   const { t } = useTranslation();
   const [shiliLoading, setShiliLoading] = useState(false);
   const [disList, setDisList]: any = useState([]);
-  const [xieyi, setXieyi] = useState(true);
   const [showSpeakerModal, setShowSpeakerModal] = useState(false);
   const [inputExampFlag, setInputExampFlag] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -186,9 +194,6 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
     setBotCreateActiveV({
       cn: vcn.cn,
     });
-  };
-  const onChecked = (e: CheckboxChangeEvent) => {
-    setXieyi(e.target.checked);
   };
 
   /**
@@ -395,7 +400,6 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
   };
 
   const [pluginModalOpen, setPluginModalOpen] = useState(false);
-  const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
 
   return (
     <div
@@ -681,7 +685,9 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
                                 ? '#13A10e'
                                 : item.tag == 'AIUI-RAG2'
                                   ? 'linear-gradient(215deg, #6F8AF5 18%, #0458FF 82%)'
-                                  : 'linear-gradient(34deg, #6B23FF 19%, rgba(153, 98, 255, 0.9281) 83%)',
+                                  : item.tag == 'Volcengine-RAG'
+                                    ? 'linear-gradient(215deg, #3C8CFF 18%, #1664FF 82%)'
+                                    : 'linear-gradient(34deg, #6B23FF 19%, rgba(153, 98, 255, 0.9281) 83%)',
                             width: '58px',
                             height: '28px',
                             fontFamily: '苹方',
@@ -700,7 +706,9 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
                               )
                             : item.tag == 'AIUI-RAG2'
                               ? t('configBase.CapabilityDevelopment.stardust')
-                              : t('configBase.CapabilityDevelopment.spark')}
+                              : item.tag == 'Volcengine-RAG'
+                                ? t('knowledge.volcengineShort')
+                                : t('configBase.CapabilityDevelopment.spark')}
                         </div>
                         <div className={styles.img}>
                           <img src={fileImg} alt="" />
@@ -967,6 +975,57 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
           />
         </div>
       )}
+      {showMcpSection && setBuiltinTools && (
+        <div
+          className={cls(
+            styles.capabilitySection,
+            showKnowledgeSection && styles.capabilitySectionCompact
+          )}
+        >
+          <div className={styles.capabilityBlock}>
+            <div className={styles.capabilityBlockHeader}>
+              <div className={styles.capabilityTitleGroup}>
+                <span className={cls(styles.capabilityIcon, styles.skillIcon)}>
+                  <StockOutlined />
+                </span>
+                <div>
+                  <div className={styles.capabilityTitleRow}>
+                    <span className={styles.capabilityTitle}>A股投研工具</span>
+                    <span
+                      className={cls(
+                        styles.capabilityStatus,
+                        builtinTools.includes(A_SHARE_TOOL_GROUP)
+                          ? styles.statusReady
+                          : styles.statusMuted
+                      )}
+                    >
+                      {builtinTools.includes(A_SHARE_TOOL_GROUP)
+                        ? '已开启'
+                        : '未开启'}
+                    </span>
+                  </div>
+                  <div className={styles.capabilityDescription}>
+                    沪深 A 股行情（东方财富公开数据）、用户的 5
+                    万元模拟账户（次日开盘价成交）、交易经验库和可回测的策略进化。仅用于模拟交易与学习研究。
+                  </div>
+                </div>
+              </div>
+              <Switch
+                checked={builtinTools.includes(A_SHARE_TOOL_GROUP)}
+                onChange={checked =>
+                  setBuiltinTools(
+                    checked
+                      ? Array.from(
+                          new Set([...builtinTools, A_SHARE_TOOL_GROUP])
+                        )
+                      : builtinTools.filter(g => g !== A_SHARE_TOOL_GROUP)
+                  )
+                }
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {showMcpSection && (
         <div
           className={cls(
@@ -1165,48 +1224,21 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
             showKnowledgeSection && styles.capabilitySectionCompact
           )}
         >
-          <div className={styles.capabilityBlock}>
-            <div className={styles.capabilityBlockHeader}>
-              <div className={styles.capabilityTitleGroup}>
-                <span className={cls(styles.capabilityIcon, styles.mcpIcon)}>
-                  <ApiOutlined />
-                </span>
-                <div>
-                  <div className={styles.capabilityTitleRow}>
-                    <span className={styles.capabilityTitle}>工作流</span>
-                    <span
-                      className={cls(
-                        styles.capabilityStatus,
-                        workflows.length > 0
-                          ? styles.statusReady
-                          : styles.statusMuted
-                      )}
-                    >
-                      {workflows.length > 0
-                        ? `已添加 ${workflows.length} 个`
-                        : '未添加'}
-                    </span>
-                  </div>
-                  <div className={styles.capabilityDescription}>
-                    引入已发布的工作流，模型会根据工作流描述自主选择调用。
-                  </div>
-                </div>
-              </div>
-              <Button
-                icon={<PlusOutlined />}
-                className={styles.capabilityActionButton}
-                onClick={() => setWorkflowModalOpen(true)}
-              >
-                {workflows.length > 0 ? '管理工作流' : '添加工作流'}
-              </Button>
-            </div>
-
-            {workflows.length > 0 ? (
+          <SubAgentSection
+            agents={agents}
+            setAgents={setAgents}
+            autoTeam={autoTeam}
+            setAutoTeam={setAutoTeam}
+            currentBotId={currentBotId}
+          >
+            {workflows.length > 0 && (
               <div className={styles.skillList}>
                 {workflows.map((item: AgentWorkflow) => (
                   <div className={styles.skillRow} key={item.flowId}>
                     <div className={styles.skillRowMeta}>
-                      <span className={styles.skillRowName}>{item.name}</span>
+                      <span className={styles.skillRowName}>
+                        {item.name}（工作流，已不再支持新增）
+                      </span>
                       <span className={styles.skillRowDesc}>
                         {item.description || '暂无描述'}
                       </span>
@@ -1221,25 +1253,8 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
                   </div>
                 ))}
               </div>
-            ) : (
-              <button
-                type="button"
-                className={styles.capabilityEmptyState}
-                onClick={() => setWorkflowModalOpen(true)}
-              >
-                <span className={styles.capabilityEmptyTitle}>暂无工作流</span>
-                <span className={styles.capabilityEmptyDescription}>
-                  点击添加工作流，引入已发布的工作流作为可调用能力。
-                </span>
-              </button>
             )}
-          </div>
-          <WorkflowSelectModal
-            open={workflowModalOpen}
-            selected={workflows}
-            onClose={() => setWorkflowModalOpen(false)}
-            onChange={setWorkflows}
-          />
+          </SubAgentSection>
         </div>
       )}
       {showPersonalizationSection && (
@@ -1595,31 +1610,6 @@ const CapabilityDevelopment: React.FC<CapabilityDevelopmentProps> = props => {
               />
             </div>
           )}
-          <Checkbox
-            style={{ marginTop: '20px' }}
-            onChange={onChecked}
-            checked={xieyi}
-            className={styles.customCheckbox}
-          >
-            {t('configBase.CapabilityDevelopment.iHaveAgreed')}
-            <a
-              href="https://www.xfyun.cn/doc/policy/agreement.html"
-              rel="noreferrer"
-              target="_blank"
-            >
-              {t(
-                'configBase.CapabilityDevelopment.xunfeiOpenPlatformServiceAgreement'
-              )}
-            </a>
-            与
-            <a
-              href="https://www.xfyun.cn/doc/policy/privacy.html"
-              rel="noreferrer"
-              target="_blank"
-            >
-              {t('configBase.CapabilityDevelopment.privacyAgreement')}
-            </a>
-          </Checkbox>
         </div>
       )}
       {showPersonalizationSection && (

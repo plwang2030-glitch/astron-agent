@@ -124,6 +124,10 @@ const useAddKnowledge = () => {
         label: 'Ragflow',
         value: 'Ragflow-RAG',
       },
+      {
+        label: t('knowledge.volcengineKnowledge'),
+        value: 'Volcengine-RAG',
+      },
     ];
     return options;
   }, []);

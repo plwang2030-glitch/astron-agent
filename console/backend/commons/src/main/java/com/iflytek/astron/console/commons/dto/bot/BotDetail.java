@@ -39,6 +39,11 @@ public class BotDetail {
     private String skills;
     private String tools;
     private String workflows;
+    private String agents;
+    private Integer autoTeam;
+    private Integer deepThinking;
+    /** JSON array of opt-in built-in tool groups, e.g. {@code ["a_share"]}. */
+    private String builtinTools;
     private Integer hotNum;
     private String marketBotId;
     private Integer supportSystem;

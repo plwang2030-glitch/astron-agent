@@ -117,6 +117,18 @@ public class BotCreateForm {
     @Schema(description = "Selected workflows imported from the workflow list")
     private List<BotWorkflow> workflows;
 
+    /** Other agents this agent can hand questions to; the model picks one by intent. */
+    private List<BotAgent> agents;
+
+    /** 1 = pick experts from the space's published agents per question; null keeps the saved value. */
+    private Integer autoTeam;
+
+    /** 深度思考: 1 on (default), 0 off; null keeps the saved value. */
+    private Integer deepThinking;
+
+    /** Opt-in built-in tool groups, e.g. {@code ["a_share"]}; null keeps the saved value. */
+    private List<String> builtinTools;
+
     @Schema(description = "Background image color scheme: 0 Light, 1 Dark")
     private Integer backgroundColor;
 
@@ -196,5 +208,18 @@ public class BotCreateForm {
         private String name;
         private String description;
         private String icon;
+    }
+
+    @Data
+    public static class BotAgent {
+        private Integer botId;
+        private String name;
+        private String description;
+        private String avatar;
+        /**
+         * 直接回复用户: when the lead calls only this agent, its answer is streamed to the user as the final
+         * reply and the lead does not write again. Only {@code true} is stored.
+         */
+        private Boolean direct;
     }
 }

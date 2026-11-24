@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import MessageList from './message-list';
 import { MessageListType } from '@/types/chat';
 import { getLanguageCode } from '@/utils/http';
+import { postStopChat } from '@/services/chat';
 import eventBus from '@/utils/event-bus';
 import { baseURL } from '@/utils/http';
 import { ModelListData } from '@/services/spark-common';
@@ -21,6 +22,8 @@ import {
 import type { AgentSkill } from '@/types/skill';
 import type { AgentTool } from '@/types/plugin-store';
 import type { AgentWorkflow } from '@/types/agent-workflow';
+import { applyTeamEvent, type TeamEvent, type TeamState } from '@/types/team';
+import type { AgentRef } from '@/types/agent-ref';
 import useSpaceStore from '@/store/space-store';
 import { fetchSseWithContext } from '@/utils/sse-request';
 
@@ -46,6 +49,7 @@ interface SSEData {
   content?: string;
   error?: string | boolean;
   message?: string;
+  team?: TeamEvent;
   code?: number;
 }
 
@@ -73,6 +77,13 @@ const PromptTry = forwardRef<
     skills?: AgentSkill[];
     tools?: AgentTool[];
     workflows?: AgentWorkflow[];
+    agents?: AgentRef[];
+    /** 从专家库按问题自动组队 */
+    autoTeam?: boolean;
+    /** 深度思考开关，未传时按开启处理 */
+    deepThinking?: boolean;
+    /** 内置工具组（如 a_share），未传时按已保存的配置 */
+    builtinTools?: string[];
     findModelOptionByUniqueKey: (
       uniqueKey: string
     ) => ModelListData | undefined;
@@ -100,6 +111,10 @@ const PromptTry = forwardRef<
       skills,
       tools,
       workflows,
+      agents,
+      autoTeam,
+      deepThinking,
+      builtinTools,
       initialMessages,
       onMessagesChange,
       showHeaderAndRecommend = true,
@@ -115,6 +130,7 @@ const PromptTry = forwardRef<
     const [messageList, setMessageList] = useState<MessageListType[]>([]); // 消息列表
     const controllerRef = useRef<AbortController>(new AbortController()); //sse请求ref
     const currentSid = useRef<string>(''); // 当前sid
+    const currentStreamId = useRef<string>(''); // 服务端流 id（start 事件下发），停止时通知服务端
     const pendingInitialMessagesRef = useRef<MessageListType[] | null>(null);
 
     // 使用useImperativeHandle暴露组件方法
@@ -166,15 +182,17 @@ const PromptTry = forwardRef<
 
     // 监听loading状态变化，通知config-base
     useEffect(() => {
+      // 首个分片到达后 isLoading 就会变为 false，但回答仍在流式输出；
+      // 以 isCompleted 为准，避免输出过程中又发出新问题、两路流互相覆盖
       eventBus.emit('promptTry.loadingChange', {
         instanceId: instanceId.current,
-        loading: isLoading,
+        loading: isLoading || !isCompleted,
       });
-    }, [isLoading]);
+    }, [isLoading, isCompleted]);
 
     // 点击发送按钮
     const handleSendBtnClick = (text?: string) => {
-      if (isLoading) {
+      if (isLoading || !isCompleted) {
         message.warning(t('configBase.promptTry.answerPleaseTryAgainLater'));
         return;
       }
@@ -254,6 +272,18 @@ const PromptTry = forwardRef<
       if (workflows && workflows.length > 0) {
         form.append('workflows', JSON.stringify(workflows));
       }
+      if (agents && agents.length > 0) {
+        form.append('agents', JSON.stringify(agents));
+      }
+      if (autoTeam) {
+        form.append('autoTeam', 'true');
+      }
+      if (deepThinking === false) {
+        form.append('deepThinking', 'false');
+      }
+      if (builtinTools) {
+        form.append('builtinTools', JSON.stringify(builtinTools));
+      }
 
       // 添加人设配置信息
       if (personalityConfig) {
@@ -265,9 +295,14 @@ const PromptTry = forwardRef<
     const handleFetchSSE = (esURL: string, form: FormData) => {
       let ans: string = '';
       let reasoning: string = ''; //思考链内容
-      let toolsName: string = ''; //工具名称
+      // 工具名称与溯源：只在收到 tool_calls 时更新，后续事件（如 complete）不带该字段时保留
+      let toolNames: string[] = [];
+      let traceSource = '';
+      let team: TeamState | undefined; // 专家团进度
       const controller = new AbortController();
       controllerRef.current = controller;
+      currentSid.current = '';
+      currentStreamId.current = '';
       setIsLoading(true);
       setIsCompleted(false);
       // 先追加用户消息
@@ -314,8 +349,28 @@ const PromptTry = forwardRef<
           const { error, id, type, choices, end, content, message, code } =
             data;
           id && (currentSid.current = id.toString());
-          if (type === 'start') return;
+          if (type === 'start') {
+            const sseId = (data as { sseId?: string }).sseId;
+            if (sseId) currentStreamId.current = sseId;
+            return;
+          }
           setIsLoading(false);
+          // 专家团：各专家的开始、实时输出和结果
+          if (type === 'team' && data.team) {
+            team = applyTeamEvent(team, data.team);
+            const snapshot = team;
+            setMessageList(prev => {
+              const updated = [...prev];
+              const last = updated.length - 1;
+              updated[last] = {
+                ...updated[last],
+                message: updated[last]?.message || '',
+                team: snapshot,
+              };
+              return updated;
+            });
+            return;
+          }
           if (code || error) {
             const errorMsg = (message as string) || '发生未知错误';
             setMessageList(prev => {
@@ -349,7 +404,14 @@ const PromptTry = forwardRef<
           // 思考链
           reasoning += choices?.[0]?.delta?.reasoning_content || '';
           // 工具调用
-          toolsName = choices?.[1]?.delta?.tool_calls?.[0]?.deskToolName || '';
+          const toolCalls = choices?.[1]?.delta?.tool_calls;
+          if (toolCalls && toolCalls.length > 0) {
+            const names = toolCalls
+              .map(call => call?.deskToolName)
+              .filter((name): name is string => Boolean(name));
+            toolNames = Array.from(new Set([...toolNames, ...names]));
+            traceSource = JSON.stringify(toolCalls);
+          }
           // 正常文本内容
           ans = `${ans}${choices?.[0]?.delta?.content || content || ''}`;
           setMessageList(prev => {
@@ -359,10 +421,9 @@ const PromptTry = forwardRef<
               ...updated[last],
               message: ans || '',
               reasoning: reasoning,
-              tools: toolsName ? [toolsName] : [],
-              traceSource: choices?.[1]?.delta?.tool_calls
-                ? JSON.stringify(choices[1].delta.tool_calls)
-                : '',
+              tools: toolNames,
+              traceSource,
+              team,
             };
             return updated;
           });
@@ -383,6 +444,14 @@ const PromptTry = forwardRef<
 
     // 停止回答
     const stopAnswer = () => {
+      // 通知服务端停止调用模型，否则模型会继续生成直到下一次写回失败
+      const streamId = currentStreamId.current;
+      if (streamId) {
+        postStopChat(streamId).catch(err => {
+          console.error('Failed to stop debug stream', err);
+        });
+        currentStreamId.current = '';
+      }
       controllerRef?.current.abort();
       setMessageList(prev => {
         const updated = [...prev];

@@ -17,6 +17,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
             "/api/model/checkModelBase",
             "/internal/gateway/auth/**",
             "/home-page/agent-square/**",
+            // WebSocket handshake authorized by a one-time ticket, see VolcAsrWebSocketConfig.
+            "/rtasr/volc/ws",
             "/error"
     };
 

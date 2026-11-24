@@ -33,11 +33,19 @@ export const buildDebugSessionTitle = (
   return session.title?.trim() || '未命名调试会话';
 };
 
+export const AGENT_DEBUG_SESSION_PAGE_SIZE = 30;
+
 export const getAgentDebugSessions = (
-  botId: number
+  botId: number,
+  options: { keyword?: string; offset?: number; limit?: number } = {}
 ): Promise<AgentDebugSession[]> => {
   return http.get('/agent-debug/sessions', {
-    params: { botId },
+    params: {
+      botId,
+      keyword: options.keyword || undefined,
+      offset: options.offset ?? 0,
+      limit: options.limit ?? AGENT_DEBUG_SESSION_PAGE_SIZE,
+    },
   });
 };
 

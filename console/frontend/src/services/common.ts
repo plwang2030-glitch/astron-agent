@@ -5,7 +5,7 @@ import type {
 } from '@/components/workflow/types/drawer/chat-debugger';
 import type { ConfigResponse } from '@/types/resource';
 import type { ModelConfigParam } from '@/types/model';
-import http from '@/utils/http';
+import http, { AI_GENERATE_TIMEOUT } from '@/utils/http';
 import { feedbackType } from '@/types/types-services';
 import { AvatarType } from '@/types/resource';
 
@@ -81,7 +81,8 @@ export async function nextQuestionAdvice(data: {
 }): Promise<string[]> {
   const suggestions = await http.post<unknown, unknown>(
     '/prompt/next-question-advice',
-    data
+    data,
+    { timeout: AI_GENERATE_TIMEOUT }
   );
   if (
     !Array.isArray(suggestions) ||

@@ -1,3 +1,5 @@
+import TeamProgress from '@/components/team-progress';
+import { teamFromTrace } from '@/types/team';
 import { ReactElement, useEffect, useRef, MutableRefObject } from 'react';
 import type { MessageListType, BotInfoType } from '@/types/chat';
 import errorIcon from '@/assets/imgs/sparkImg/errorIcon.svg';
@@ -113,8 +115,13 @@ const MessageList = (props: {
   };
 
   //渲染回复
-  const renderResp = (item: MessageListType): ReactElement => {
-    const showLoading = !item.sid && isLoading;
+  const renderResp = (
+    item: MessageListType,
+    isLastMessage: boolean
+  ): ReactElement => {
+    // 只有最后一条回答可能处于生成中；历史回答（含停止/出错的）一律视为已结束
+    const streaming = isLastMessage && !isCompleted;
+    const showLoading = isLastMessage && !item.sid && isLoading;
     return (
       <div
         className="mt-[14px] w-[inherit] max-w-full"
@@ -144,17 +151,22 @@ const MessageList = (props: {
             )}
 
             {/* 使用工具 */}
+            {/* 专家团进度 */}
+            <TeamProgress
+              team={item.team ?? teamFromTrace(item.traceSource)}
+              streaming={streaming}
+            />
             <UseToolsInfo
               allToolsList={item?.tools || []}
               loading={showLoading}
             />
             {/* 思考链 */}
-            <DeepThinkProgress answerItem={item} />
+            <DeepThinkProgress answerItem={item} streaming={streaming} />
             {/* 回答内容 */}
-            <MarkdownRender content={item.message} isSending={showLoading} />
+            <MarkdownRender content={item.message} isSending={streaming} />
           </div>
         </div>
-        {!isLoading && !isCompleted && !item.sid && (
+        {streaming && (
           <div
             className="text-sm text-[#9194bf] bg-white cursor-pointer ml-10 hover:text-[#257eff] mb-3"
             onClick={() => {
@@ -183,7 +195,7 @@ const MessageList = (props: {
             return (
               <div className="w-full" key={index}>
                 {item?.reqType === 'USER' && renderReq(item)}
-                {item?.reqType === 'BOT' && renderResp(item)}
+                {item?.reqType === 'BOT' && renderResp(item, index === 0)}
               </div>
             );
           })}

@@ -15,6 +15,9 @@ const hasHeaderList = [
   'automation',
 ];
 
+/** Tabs whose last path segment is also used elsewhere (e.g. /management/release/workflow). */
+const resourceOnlyHeaderList = ['workflow'];
+
 interface BasicLayoutProps {
   showHeader?: boolean;
 }
@@ -24,10 +27,13 @@ const BasicLayout: FC<BasicLayoutProps> = ({ showHeader }) => {
   const navigate = useNavigate();
 
   // 如果没有显式传入 showHeader，则使用原来的逻辑判断
+  const lastSegment = location?.pathname?.split('/')?.pop() as string;
   const shouldShowHeader =
     showHeader !== undefined
       ? showHeader
-      : hasHeaderList.includes(location?.pathname?.split('/')?.pop() as string);
+      : hasHeaderList.includes(lastSegment) ||
+        (resourceOnlyHeaderList.includes(lastSegment) &&
+          location.pathname.startsWith('/resource/'));
 
   // 处理搜索功能
   const handleSearch = useCallback((value: string, type: string) => {
@@ -90,6 +96,12 @@ const BasicLayout: FC<BasicLayoutProps> = ({ showHeader }) => {
             }
           );
           window.dispatchEvent(createAutomationEvent);
+          break;
+        }
+        case 'workflow': {
+          window.dispatchEvent(
+            new CustomEvent('headerCreateWorkflow', { detail: { type } })
+          );
           break;
         }
         default:

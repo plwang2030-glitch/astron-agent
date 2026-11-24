@@ -77,7 +77,8 @@ public class ChatMessageController {
             @RequestParam String text,
             @RequestParam(required = false) String fileUrl,
             @RequestParam(required = false) String workflowOperation,
-            @RequestParam(required = false) String workflowVersion) {
+            @RequestParam(required = false) String workflowVersion,
+            @RequestParam(required = false) Boolean background) {
         String sseId = RandomUtil.randomString(8);
         SseEmitter sseEmitter = SseEmitterUtil.createSseEmitter();
 
@@ -111,7 +112,13 @@ public class ChatMessageController {
             return sseEmitter;
         }
 
-        return processChatRequest(chatContext, text, fileUrl, sseEmitter, sseId, workflowOperation, workflowVersion);
+        return processChatRequest(chatContext, text, fileUrl, sseEmitter, sseId, workflowOperation, workflowVersion,
+                Boolean.TRUE.equals(background));
+    }
+
+    /** Same as {@link #chat(Long, String, String, String, String, Boolean)} without background mode. */
+    public SseEmitter chat(Long chatId, String text, String fileUrl, String workflowOperation, String workflowVersion) {
+        return chat(chatId, text, fileUrl, workflowOperation, workflowVersion, null);
     }
 
     /**
@@ -197,12 +204,14 @@ public class ChatMessageController {
      * @param sseId SSE unique identifier
      * @return Returns SseEmitter object
      */
-    private SseEmitter processChatRequest(ChatContext chatContext, String text, String fileUrl, SseEmitter sseEmitter, String sseId, String workflowOperation, String workflowVersion) {
+    private SseEmitter processChatRequest(ChatContext chatContext, String text, String fileUrl, SseEmitter sseEmitter, String sseId, String workflowOperation, String workflowVersion,
+            boolean background) {
         log.info("Starting to process chat request, sseId: {}, uid: {}, chatId: {}, botId: {}, text: {}",
                 sseId, chatContext.uid(), chatContext.chatId(), chatContext.botId(),
                 text.length() > 50 ? text.substring(0, 50) + "..." : text);
 
         ChatBotReqDto chatBotReqDto = buildChatBotRequest(chatContext, text, fileUrl);
+        chatBotReqDto.setBackground(background);
 
         try {
             sendStartSignal(sseEmitter, sseId, chatContext);
@@ -415,6 +424,10 @@ public class ChatMessageController {
         debugChatReqDto.setSkills(debugRequest.getSkills());
         debugChatReqDto.setTools(debugRequest.getTools());
         debugChatReqDto.setWorkflows(debugRequest.getWorkflows());
+        debugChatReqDto.setAgents(debugRequest.getAgents());
+        debugChatReqDto.setAutoTeam(debugRequest.getAutoTeam());
+        debugChatReqDto.setDeepThinking(debugRequest.getDeepThinking());
+        debugChatReqDto.setBuiltinTools(debugRequest.getBuiltinTools());
         debugChatReqDto.setModel(debugRequest.getModel());
         debugChatReqDto.setModelId(debugRequest.getModelId());
         debugChatReqDto.setMaasDatasetList(maasDatasetList);

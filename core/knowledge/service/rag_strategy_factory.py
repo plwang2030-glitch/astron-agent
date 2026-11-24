@@ -12,6 +12,7 @@ from knowledge.service.impl.aiui_strategy import AIUIRAGStrategy
 from knowledge.service.impl.cbg_strategy import CBGRAGStrategy
 from knowledge.service.impl.ragflow_strategy import RagflowRAGStrategy
 from knowledge.service.impl.sparkdesk_strategy import SparkDeskRAGStrategy
+from knowledge.service.impl.volcengine_strategy import VolcengineRAGStrategy
 from knowledge.service.rag_strategy import RAGStrategy
 
 
@@ -23,6 +24,7 @@ class RAGStrategyFactory:
         "SparkDesk-RAG": SparkDeskRAGStrategy,
         "CBG-RAG": CBGRAGStrategy,
         "Ragflow-RAG": RagflowRAGStrategy,
+        "Volcengine-RAG": VolcengineRAGStrategy,
     }
 
     @classmethod

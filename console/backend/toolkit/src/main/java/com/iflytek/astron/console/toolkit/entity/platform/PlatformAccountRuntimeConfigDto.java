@@ -11,4 +11,8 @@ public class PlatformAccountRuntimeConfigDto {
     private boolean virtualManConfigured;
     private boolean ragflowConfigured;
     private boolean xinghuoKnowledgeConfigured;
+    private boolean volcengineConfigured;
+    private boolean volcengineKnowledgeConfigured;
+    /** Configured Volcengine knowledge base name / id (not a secret). */
+    private String volcengineKnowledgeCollection;
 }

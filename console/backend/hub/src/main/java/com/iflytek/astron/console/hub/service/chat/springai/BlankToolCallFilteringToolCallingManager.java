@@ -16,8 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Wraps a {@link ToolCallingManager} to drop tool calls whose function name is blank before they
- * are executed. Some OpenAI-compatible providers (e.g. iFlytek Spark) stream a spurious empty-name
+ * Wraps a {@link ToolCallingManager} to run independent sub-agent calls in parallel
+ * ({@link ParallelToolCalls}) and to drop tool calls whose function name is blank before they are
+ * executed. Some OpenAI-compatible providers (e.g. iFlytek Spark) stream a spurious empty-name
  * tool_call; without this, Spring AI's resolver throws "toolName cannot be null or empty" and
  * aborts the whole turn. Standard providers (e.g. deepseek) are unaffected since they never emit
  * blank names.
@@ -38,7 +39,71 @@ public class BlankToolCallFilteringToolCallingManager implements ToolCallingMana
 
     @Override
     public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
-        return delegate.executeToolCalls(prompt, stripBlankToolCalls(chatResponse));
+        ChatResponse filtered = stripBlankToolCalls(chatResponse);
+        if (log.isInfoEnabled() && filtered != null) {
+            // Each tool round costs one more model call; this shows which tools a model asked for.
+            log.info("Tool calls requested, tools={}", filtered.getResults()
+                    .stream()
+                    .filter(g -> g.getOutput() != null && g.getOutput().hasToolCalls())
+                    .flatMap(g -> g.getOutput().getToolCalls().stream())
+                    .map(ToolCall::name)
+                    .toList());
+        }
+        // A response that asks only for one 直接回复用户 agent: its answer streams to the user and is the
+        // reply, so the model is not called again just to repeat it.
+        DirectReplyTool direct = singleDirectReplyTool(prompt, filtered);
+        if (direct != null) {
+            direct.startDirectReply();
+        }
+        boolean delivered = false;
+        ToolExecutionResult result;
+        try {
+            // Independent sub-agent calls of this response run together; the delegate then only
+            // collects their results in its usual sequential loop.
+            ParallelToolCalls.prefetch(prompt, filtered);
+            result = delegate.executeToolCalls(prompt, filtered);
+        } finally {
+            ParallelToolCalls.clear();
+            if (direct != null) {
+                delivered = direct.finishDirectReply();
+            }
+        }
+        if (!delivered) {
+            return result;
+        }
+        log.info("Direct reply delivered, tool={}; the turn ends without another model call",
+                direct.getToolDefinition().name());
+        return ToolExecutionResult.builder()
+                .conversationHistory(result.conversationHistory())
+                .returnDirect(true)
+                .build();
+    }
+
+    /**
+     * The only tool call of the response, when it targets a {@link DirectReplyTool} set to reply
+     * directly.
+     */
+    private static DirectReplyTool singleDirectReplyTool(Prompt prompt, ChatResponse response) {
+        if (response == null || !(prompt.getOptions() instanceof ToolCallingChatOptions options)
+                || options.getToolCallbacks() == null) {
+            return null;
+        }
+        List<ToolCall> calls = new ArrayList<>();
+        for (Generation generation : response.getResults()) {
+            if (generation.getOutput() != null && generation.getOutput().hasToolCalls()) {
+                calls.addAll(generation.getOutput().getToolCalls());
+            }
+        }
+        if (calls.size() != 1) {
+            return null;
+        }
+        for (var callback : options.getToolCallbacks()) {
+            if (callback instanceof DirectReplyTool tool && tool.directReply()
+                    && callback.getToolDefinition().name().equals(calls.get(0).name())) {
+                return tool;
+            }
+        }
+        return null;
     }
 
     private ChatResponse stripBlankToolCalls(ChatResponse chatResponse) {

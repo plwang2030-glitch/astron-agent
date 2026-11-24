@@ -190,6 +190,23 @@ public class RepoController {
     }
 
     /**
+     * Documents of a bound Volcengine knowledge base. Read-only: they are uploaded and chunked in the
+     * Volcengine console. Access is checked against the repo like {@code /hit-test}.
+     *
+     * @param id repository ID
+     * @param offset start position
+     * @param limit page size (1~100)
+     * @return {@code {"docs":[...],"total":n}}
+     */
+    @GetMapping("/provider-docs")
+    public Object providerDocs(
+            @RequestParam("id") Long id,
+            @RequestParam(value = "offset", defaultValue = "0") Integer offset,
+            @RequestParam(value = "limit", defaultValue = "20") Integer limit) {
+        return repoService.listProviderDocs(id, offset, limit);
+    }
+
+    /**
      * List hit test history with pagination
      * <p>
      * Retrieves the historical record of hit tests performed on a specific repository. Provides

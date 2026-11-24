@@ -1,9 +1,11 @@
 package com.iflytek.astron.console.hub.service.chat.springai;
 
+import com.iflytek.astron.console.toolkit.entity.platform.AiCapability;
 import com.iflytek.astron.console.toolkit.entity.platform.PlatformAccountConfigDto;
 import com.iflytek.astron.console.toolkit.entity.vo.LLMInfoVo;
 import com.iflytek.astron.console.toolkit.service.platform.PlatformAccountService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -19,6 +21,7 @@ import java.util.Map;
  * models use their stored OpenAI-compatible endpoint; Spark (decision A1) uses the iFlytek
  * OpenAI-compatible endpoint with the platform API password.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChatModelFactory {
@@ -35,19 +38,56 @@ public class ChatModelFactory {
 
     private final PlatformAccountService platformAccountService;
 
-    public record AgentModel(OpenAiChatModel chatModel, String modelId) {}
+    /** @param ark the endpoint is Volcengine Ark, which accepts the {@code thinking} request field */
+    public record AgentModel(OpenAiChatModel chatModel, String modelId, boolean ark) {}
+
+    private static final Map<String, Object> THINKING_DISABLED = Map.of("thinking", Map.of("type", "disabled"));
+
+    /**
+     * Request body fields for an agent's 深度思考 switch. On keeps the model's default (no field); off
+     * sends Ark's {@code thinking: {type: disabled}}. Other providers use different, model-specific
+     * fields, so nothing is sent for them and the switch has no effect there.
+     *
+     * @return extra body fields, or {@code null} for none
+     */
+    public static Map<String, Object> thinkingBody(AgentModel model, boolean deepThinking) {
+        return !deepThinking && model.ark() ? THINKING_DISABLED : null;
+    }
 
     /** Custom (non-Spark) OpenAI-compatible model. */
     public AgentModel forCustomModel(LLMInfoVo info) {
         String modelId = info.getDomain();
-        return new AgentModel(build(info.getUrl(), info.getApiKey(), modelId), modelId);
+        return new AgentModel(build(info.getUrl(), info.getApiKey(), modelId), modelId, isArk(info.getUrl()));
     }
 
-    /** Spark via the OpenAI-compatible endpoint (decision A1). */
+    static boolean isArk(String url) {
+        if (StringUtils.isBlank(url)) {
+            return false;
+        }
+        try {
+            String host = URI.create(url.trim()).getHost();
+            return host != null && (host.equals("volces.com") || host.endsWith(".volces.com"));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Built-in default model. Spark via the OpenAI-compatible endpoint (decision A1), or Volcengine Ark
+     * when 「AI 能力配置 - 默认对话模型」 selects volcengine.
+     */
     public AgentModel forSparkModel(String sparkModelName) {
+        if (platformAccountService.routesToVolcengine(AiCapability.DEFAULT_CHAT)) {
+            PlatformAccountConfigDto.VolcengineConfig volc = platformAccountService.requireVolcengineArk();
+            String modelId = volc.getChatModel();
+            log.info("Default chat routed to volcengine, requestedModel={}, arkModel={}", sparkModelName, modelId);
+            return new AgentModel(build(volc.getArkBaseUrl() + "/chat/completions", volc.getArkApiKey(), modelId),
+                    modelId, true);
+        }
         PlatformAccountConfigDto.IflytekOpenPlatformConfig config = platformAccountService.requireIflytekOpenPlatform();
         String modelId = sparkModelToOpenAiModelId(sparkModelName);
-        return new AgentModel(build(SPARK_OPENAI_COMPLETIONS_URL, config.getSparkApiPassword(), modelId), modelId);
+        return new AgentModel(build(SPARK_OPENAI_COMPLETIONS_URL, config.getSparkApiPassword(), modelId), modelId,
+                false);
     }
 
     private OpenAiChatModel build(String fullUrl, String apiKey, String model) {

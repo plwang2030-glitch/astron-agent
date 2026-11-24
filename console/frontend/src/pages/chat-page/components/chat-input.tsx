@@ -9,7 +9,7 @@ import delIcon from '@/assets/imgs/chat/delete-history.svg';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { postNewChat } from '@/services/chat';
-import { message } from 'antd';
+import { message, Switch, Tooltip } from 'antd';
 import useBotInfoStore from '@/store/bot-info-store';
 import DeleteModal from './delete-modal';
 import RecorderCom, { type RecorderRef } from './recorder-com';
@@ -22,6 +22,7 @@ const ChatInput = (props: {
     item: string;
     fileUrl?: string;
     callback?: () => void;
+    background?: boolean;
   }) => void;
   botInfo: BotInfoType;
   stopAnswer: () => void;
@@ -43,6 +44,9 @@ const ChatInput = (props: {
   const [deleteModalOpen, setDeleteModalOpen] = useState<boolean>(false); //  是否显示删除对话框
   const [isComposing, setIsComposing] = useState<boolean>(false); //  是否正在输入
   const [inputValue, setInputValue] = useState<string>(''); //  输入框值
+  const [background, setBackground] = useState<boolean>(false); //  后台运行
+  // 后台运行只对指令型智能体（含专家团）生效
+  const supportsBackground = botInfo?.version === 1;
   const textAreaRef = useRef<HTMLTextAreaElement>(null); //  输入框ref
   const setBotInfo = useBotInfoStore(state => state.setBotInfo);
   const $record = useRef<RecorderRef>(null); //  录音ref
@@ -140,6 +144,7 @@ const ChatInput = (props: {
 
     handleSendMessage({
       item: inputValue,
+      background: supportsBackground && background,
       callback: () => {
         setInputValue('');
         setFileList([]);
@@ -238,6 +243,22 @@ const ChatInput = (props: {
               fileList={fileList}
             />
             <div className="flex items-center pb-2.5">
+              {supportsBackground && (
+                <Tooltip title="适合耗时较长的专家团任务：发送后立即返回，结果保存在本对话中，完成后在通知中心提醒你">
+                  <label
+                    className="flex items-center mr-3 text-xs text-[#6b7280] cursor-pointer select-none"
+                    data-testid="background-toggle"
+                  >
+                    <Switch
+                      size="small"
+                      checked={background}
+                      onChange={setBackground}
+                      className="mr-1.5"
+                    />
+                    后台运行
+                  </label>
+                </Tooltip>
+              )}
               <RecorderCom
                 changeStatus={handleRecorderStatusChange}
                 ref={$record}
@@ -259,6 +280,9 @@ const ChatInput = (props: {
               />
             </div>
           </div>
+        </div>
+        <div className="mt-2 text-center text-xs text-[#9ca3af]">
+          {t('chatPage.chatWindow.aiGeneratedNotice')}
         </div>
       </div>
       <DeleteModal

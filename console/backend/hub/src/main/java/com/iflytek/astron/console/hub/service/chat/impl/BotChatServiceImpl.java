@@ -37,6 +37,9 @@ import com.iflytek.astron.console.hub.service.bot.PersonalityConfigService;
 import com.iflytek.astron.console.hub.service.chat.BotChatService;
 import com.iflytek.astron.console.hub.service.chat.ChatListService;
 import com.iflytek.astron.console.hub.service.chat.springai.AgentChatTask;
+import com.iflytek.astron.console.hub.service.chat.springai.AgentToolCallbackResolver;
+import com.iflytek.astron.console.hub.service.chat.springai.PreparedSubAgent;
+import com.iflytek.astron.console.hub.service.chat.springai.SubAgentPreparer;
 import com.iflytek.astron.console.hub.service.chat.springai.SpringAiAgentChatService;
 import com.iflytek.astron.console.hub.service.knowledge.KnowledgeService;
 import com.iflytek.astron.console.toolkit.entity.biz.modelconfig.ModelDto;
@@ -89,6 +92,13 @@ public class BotChatServiceImpl implements BotChatService {
     @Value("${spark.chat.max.input.tokens:8000}")
     private int maxInputTokens;
 
+    /**
+     * Rounds of chat history a team lead (an agent with sub-agents) sees. It routes and delegates, so
+     * the latest rounds are enough, and every extra round slows both of its model calls. 0 = no limit.
+     */
+    @Value("${astron.agent.lead-history-rounds:5}")
+    private int leadHistoryRounds;
+
     @Autowired
     private ChatListDataService chatListDataService;
 
@@ -115,6 +125,9 @@ public class BotChatServiceImpl implements BotChatService {
 
     @Autowired
     private AgentMemoryRuntimeService agentMemoryRuntimeService;
+
+    @Autowired
+    private SubAgentPreparer subAgentPreparer;
 
     /**
      * Function to handle chat messages
@@ -148,8 +161,11 @@ public class BotChatServiceImpl implements BotChatService {
                         botConfig.modelId, botConfig.model, chatBotReqDto.getUid(), spaceId,
                         botConfig.modelOwnerUid, sseEmitter);
                 int maxInputTokens = modelConfig == null ? this.maxInputTokens : modelConfig.maxInputTokens();
+                List<PreparedSubAgent> subAgents = prepareSubAgents(chatBotReqDto.getBotId(), botConfig,
+                        chatBotReqDto.getUid(), spaceId, chatBotReqDto.getAsk());
                 List<SparkChatRequest.MessageDto> messages = buildMessageList(chatBotReqDto, botConfig.supportContext,
-                        botConfig.supportDocument, botConfig.prompt, maxInputTokens, chatReqRecords.getId());
+                        botConfig.supportDocument, withRouting(botConfig.prompt, subAgents), maxInputTokens,
+                        chatReqRecords.getId(), historyRounds(subAgents));
                 AgentChatTask task = AgentChatTask.builder()
                         .llmInfoVo(modelConfig == null ? null : modelConfig.llmInfoVo())
                         .sparkModelName(modelConfig == null ? botConfig.model : null)
@@ -159,6 +175,9 @@ public class BotChatServiceImpl implements BotChatService {
                         .skills(enrichBotSkills(botConfig.skills()))
                         .tools(botConfig.tools())
                         .workflows(botConfig.workflows())
+                        .subAgents(subAgents)
+                        .deepThinking(botConfig.deepThinking())
+                        .builtinTools(builtinTools(chatBotReqDto.getBotId()))
                         .userId(chatBotReqDto.getUid())
                         .chatId(chatBotReqDto.getChatId())
                         .botId(chatBotReqDto.getBotId())
@@ -167,6 +186,7 @@ public class BotChatServiceImpl implements BotChatService {
                         .chatReqRecords(chatReqRecords)
                         .edit(false)
                         .debug(false)
+                        .background(Boolean.TRUE.equals(chatBotReqDto.getBackground()))
                         .build();
                 task.setMessages(agentMemoryRuntimeService.enrichMessages(task));
                 springAiAgentChatService.chat(task, sseEmitter, sseId);
@@ -203,8 +223,11 @@ public class BotChatServiceImpl implements BotChatService {
                     botConfig.modelId, botConfig.model, chatBotReqDto.getUid(), spaceId,
                     botConfig.modelOwnerUid, sseEmitter);
             int maxInputTokens = modelConfig == null ? this.maxInputTokens : modelConfig.maxInputTokens();
+            List<PreparedSubAgent> subAgents = prepareSubAgents(botId, botConfig, chatBotReqDto.getUid(), spaceId,
+                    chatBotReqDto.getAsk());
             List<SparkChatRequest.MessageDto> messages = buildMessageList(chatBotReqDto, botConfig.supportContext,
-                    botConfig.supportDocument, botConfig.prompt, maxInputTokens, chatReqRecords.getId());
+                    botConfig.supportDocument, withRouting(botConfig.prompt, subAgents), maxInputTokens,
+                    chatReqRecords.getId(), historyRounds(subAgents));
             AgentChatTask task = AgentChatTask.builder()
                     .llmInfoVo(modelConfig == null ? null : modelConfig.llmInfoVo())
                     .sparkModelName(modelConfig == null ? botConfig.model : null)
@@ -214,6 +237,9 @@ public class BotChatServiceImpl implements BotChatService {
                     .skills(enrichBotSkills(botConfig.skills()))
                     .tools(botConfig.tools())
                     .workflows(botConfig.workflows())
+                    .subAgents(subAgents)
+                    .deepThinking(botConfig.deepThinking())
+                    .builtinTools(builtinTools(botId))
                     .userId(chatBotReqDto.getUid())
                     .chatId(chatBotReqDto.getChatId())
                     .botId(botId)
@@ -247,8 +273,13 @@ public class BotChatServiceImpl implements BotChatService {
             ModelConfigResult modelConfig = resolveChatModelConfiguration(
                     request.getModelId(), request.getModel(), request.getUid(), request.getSpaceId(), null, sseEmitter);
             int maxInputTokens = modelConfig == null ? this.maxInputTokens : modelConfig.maxInputTokens();
-            messageList = buildDebugMessageList(request.getText(), prompt, request.getMessages(), maxInputTokens,
-                    request.getMaasDatasetList());
+            boolean autoTeam = Boolean.TRUE.equals(request.getAutoTeam());
+            List<PreparedSubAgent> subAgents = StringUtils.isBlank(request.getAgents()) && !autoTeam
+                    ? List.of()
+                    : subAgentPreparer.prepare(request.getAgents(), autoTeam, request.getText(), request.getBotId(),
+                            request.getUid(), request.getSpaceId(), request.getUid(), request.getSpaceId(), false);
+            messageList = buildDebugMessageList(request.getText(), withRouting(prompt, subAgents),
+                    request.getMessages(), maxInputTokens, request.getMaasDatasetList(), historyRounds(subAgents));
             if (modelConfig != null) {
                 if (!modelService.checkModelBase(modelConfig.llmInfoVo().getLlmId(),
                         modelConfig.llmInfoVo().getServiceId(), modelConfig.llmInfoVo().getUrl(), request.getUid(), request.getSpaceId())) {
@@ -264,6 +295,12 @@ public class BotChatServiceImpl implements BotChatService {
                     .skills(enrichBotSkills(request.getSkills()))
                     .tools(request.getTools())
                     .workflows(request.getWorkflows())
+                    .subAgents(subAgents)
+                    .deepThinking(!Boolean.FALSE.equals(request.getDeepThinking()))
+                    // Unsaved switch from the config page wins; otherwise the saved value.
+                    .builtinTools(request.getBuiltinTools() != null
+                            ? AgentToolCallbackResolver.parseBuiltinTools(request.getBuiltinTools())
+                            : builtinTools(request.getBotId()))
                     .userId(request.getUid())
                     .chatId(null)
                     .botId(request.getBotId())
@@ -456,7 +493,10 @@ public class BotChatServiceImpl implements BotChatService {
                     resolveBaseMcpServerUrls(botId),
                     resolveBaseSkills(botId),
                     resolveBaseTools(botId),
-                    resolveBaseWorkflows(botId));
+                    resolveBaseWorkflows(botId),
+                    chatBotDataService.findById(botId).map(ChatBotBase::getAgents).orElse(null),
+                    chatBotDataService.findById(botId).map(b -> Objects.equals(b.getAutoTeam(), 1)).orElse(false),
+                    chatBotDataService.findById(botId).map(b -> !Objects.equals(b.getDeepThinking(), 0)).orElse(true));
         } else {
             ChatBotBase chatBotBase = chatBotDataService.findById(botId)
                     .orElseThrow(() -> new BusinessException(ResponseEnum.BOT_NOT_EXISTS));
@@ -472,8 +512,78 @@ public class BotChatServiceImpl implements BotChatService {
                     chatBotBase.getMcpServerUrls(),
                     chatBotBase.getSkills(),
                     chatBotBase.getTools(),
-                    chatBotBase.getWorkflows());
+                    chatBotBase.getWorkflows(),
+                    chatBotBase.getAgents(),
+                    Objects.equals(chatBotBase.getAutoTeam(), 1),
+                    !Objects.equals(chatBotBase.getDeepThinking(), 0));
         }
+    }
+
+    /**
+     * Resolves the main agent's attached agents. Permission and skill scope follow the main agent's
+     * owner / space, so a shared or published agent keeps working for other users.
+     */
+    private List<PreparedSubAgent> prepareSubAgents(Integer botId, BotConfiguration botConfig, String uid,
+            Long spaceId, String userText) {
+        if (StringUtils.isBlank(botConfig.agents()) && !botConfig.autoTeam()) {
+            return List.of();
+        }
+        ChatBotBase base = chatBotDataService.findById(botId).orElse(null);
+        if (base == null) {
+            return List.of();
+        }
+        return subAgentPreparer.prepare(botConfig.agents(), botConfig.autoTeam(), userText, botId, base.getUid(),
+                base.getSpaceId(), uid, spaceId, botConfig.modelOwnerUid() != null);
+    }
+
+    /** Opt-in built-in tool groups saved on the agent (e.g. {@code a_share}). */
+    private List<String> builtinTools(Integer botId) {
+        if (botId == null) {
+            return List.of();
+        }
+        return chatBotDataService.findById(botId)
+                .map(b -> AgentToolCallbackResolver.parseBuiltinTools(b.getBuiltinTools()))
+                .orElse(List.of());
+    }
+
+    /** History rounds the agent sees: limited for team leads, unlimited (0) otherwise. */
+    private int historyRounds(List<PreparedSubAgent> subAgents) {
+        return subAgents == null || subAgents.isEmpty() ? 0 : Math.max(0, leadHistoryRounds);
+    }
+
+    /**
+     * Keeps the last {@code rounds} user / assistant rounds of {@code history} ({@code rounds <= 0}:
+     * unchanged). The kept part starts with a user message.
+     */
+    static List<SparkChatRequest.MessageDto> limitHistoryRounds(List<SparkChatRequest.MessageDto> history,
+            int rounds) {
+        if (rounds <= 0 || history == null || history.isEmpty()) {
+            return history;
+        }
+        int users = 0;
+        int from = history.size();
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if ("user".equalsIgnoreCase(history.get(i).getRole())) {
+                if (users == rounds) {
+                    break;
+                }
+                users++;
+                from = i;
+            }
+        }
+        if (from == 0) {
+            return history;
+        }
+        log.info("History limited for team lead, rounds={}, kept={} of {} messages", rounds,
+                history.size() - from, history.size());
+        return new ArrayList<>(history.subList(from, history.size()));
+    }
+
+    private static String withRouting(String prompt, List<PreparedSubAgent> subAgents) {
+        if (subAgents == null || subAgents.isEmpty()) {
+            return prompt;
+        }
+        return StringUtils.defaultString(prompt) + SubAgentPreparer.routingPrompt(subAgents);
     }
 
     private String resolveBaseMcpServerUrls(Integer botId) {
@@ -606,7 +716,8 @@ public class BotChatServiceImpl implements BotChatService {
      * @param prompt Prompt text
      * @return List of message data transfer objects
      */
-    private List<SparkChatRequest.MessageDto> buildMessageList(ChatBotReqDto chatBotReqDto, boolean supportContext, boolean supportDocument, String prompt, int maxInputTokens, Long reqId) {
+    private List<SparkChatRequest.MessageDto> buildMessageList(ChatBotReqDto chatBotReqDto, boolean supportContext, boolean supportDocument, String prompt, int maxInputTokens, Long reqId,
+            int maxHistoryRounds) {
         List<SparkChatRequest.MessageDto> messageDtoList = new ArrayList<>();
 
         SparkChatRequest.MessageDto systemMessage = new SparkChatRequest.MessageDto();
@@ -643,7 +754,9 @@ public class BotChatServiceImpl implements BotChatService {
 
         messageDtoList.add(systemMessage);
 
-        List<SparkChatRequest.MessageDto> historyMessages = getHistoryMessages(chatBotReqDto, supportContext, supportDocument, tokenStats.availableTokens());
+        List<SparkChatRequest.MessageDto> historyMessages = limitHistoryRounds(
+                getHistoryMessages(chatBotReqDto, supportContext, supportDocument, tokenStats.availableTokens()),
+                maxHistoryRounds);
         messageDtoList.addAll(historyMessages);
         messageDtoList.add(queryMessage);
 
@@ -666,7 +779,8 @@ public class BotChatServiceImpl implements BotChatService {
      * @param maxInputTokens Maximum input token limit
      * @return List of message data transfer objects with truncation applied
      */
-    private List<SparkChatRequest.MessageDto> buildDebugMessageList(String text, String prompt, List<String> messages, int maxInputTokens, List<String> maasDatasetList) {
+    private List<SparkChatRequest.MessageDto> buildDebugMessageList(String text, String prompt, List<String> messages, int maxInputTokens, List<String> maasDatasetList,
+            int maxHistoryRounds) {
         List<SparkChatRequest.MessageDto> messageDtoList = new ArrayList<>();
 
         SparkChatRequest.MessageDto systemMessage = new SparkChatRequest.MessageDto();
@@ -712,7 +826,8 @@ public class BotChatServiceImpl implements BotChatService {
                     messageDto.setContent(builder.toString());
                 }
             }
-            List<SparkChatRequest.MessageDto> truncatedHistory = truncateHistoryByTokens(historyMessages, tokenStats.availableTokens());
+            List<SparkChatRequest.MessageDto> truncatedHistory = limitHistoryRounds(
+                    truncateHistoryByTokens(historyMessages, tokenStats.availableTokens()), maxHistoryRounds);
             messageDtoList.addAll(truncatedHistory);
 
             log.debug("Debug history message truncation completed - Original count: {}, After truncation: {}",
@@ -817,7 +932,7 @@ public class BotChatServiceImpl implements BotChatService {
 
     private record BotConfiguration(String prompt, boolean supportContext, String model, String openedTool,
             Integer version, Long modelId, String modelOwnerUid, boolean supportDocument, String mcpServerUrls, String skills,
-            String tools, String workflows) {}
+            String tools, String workflows, String agents, boolean autoTeam, boolean deepThinking) {}
 
     private record TokenStatistics(int systemTokens, int currentUserTokens, int reservedTokens, int availableTokens) {}
 

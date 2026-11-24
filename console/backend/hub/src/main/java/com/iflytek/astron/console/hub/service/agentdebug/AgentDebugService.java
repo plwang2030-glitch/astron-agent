@@ -13,6 +13,16 @@ public interface AgentDebugService {
 
     List<AgentDebugSessionDto> listSessions(String uid, Long spaceId, Integer botId);
 
+    /**
+     * Lists debug sessions newest first.
+     *
+     * @param keyword optional title filter (substring match)
+     * @param offset number of sessions to skip, for paging
+     * @param limit page size, capped by the implementation
+     */
+    List<AgentDebugSessionDto> listSessions(
+            String uid, Long spaceId, Integer botId, String keyword, int offset, int limit);
+
     default AgentDebugSessionDto createSession(String uid, CreateAgentDebugSessionRequest request) {
         return createSession(uid, null, request);
     }

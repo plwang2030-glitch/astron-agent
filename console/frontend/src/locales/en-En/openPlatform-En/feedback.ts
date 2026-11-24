@@ -1,7 +1,7 @@
 const translation = {
   feedback: 'Feedback',
   aboutModelOutput: 'Feedback on the output content of the large model',
-  aboutModelOutput2: 'Feedback through the StarChat page',
+  aboutModelOutput2: 'Feedback through the SkyLumin page',
   title: 'Feedback',
   feedbackTitle: 'Xingchen Big Model Application Development Platform-Feedback',
   problemDesc: 'Problem description',

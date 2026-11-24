@@ -1,7 +1,6 @@
 import React, { useState, useEffect, memo } from 'react';
 import styles from './index.module.scss';
-import shareLog from '@/assets/imgs/share-page/sharepageLog.svg';
-import agentLogoTextEn from '@/assets/imgs/sidebar/agentLogoTextEn.svg';
+import brandLogo from '@/assets/imgs/brand/skylumin-logo.svg';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   getInviteByParam,
@@ -14,7 +13,6 @@ import spaceAvatar from '@/assets/imgs/share-page/spaceAva.svg';
 import useSpaceStore from '@/store/space-store';
 import { useEnterprise } from '@/hooks/use-enterprise';
 import { useSpaceType } from '@/hooks/use-space-type';
-import { getLanguageCode } from '@/utils/http';
 import { useTranslation } from 'react-i18next';
 
 function index() {
@@ -25,7 +23,6 @@ function index() {
   const [searchParams] = useSearchParams();
   const param = searchParams.get('param');
   const { getJoinedEnterpriseList } = useEnterprise();
-  const languageCode = getLanguageCode();
   const { t } = useTranslation();
   // 检查邀请是否已过期的函数
   const checkInviteExpired = (info: any) => {
@@ -94,11 +91,7 @@ function index() {
   };
   return (
     <div className={styles.sharePage}>
-      <img
-        className={styles.shareLog}
-        src={languageCode === 'en-US' ? agentLogoTextEn : shareLog}
-        alt=""
-      />
+      <img className={styles.shareLog} src={brandLogo} alt="SkyLumin" />
       <div className={styles.invite}>
         <div className={styles.flex}>
           <img

@@ -66,20 +66,18 @@ class TraceToSourceServiceImplTest {
     }
 
     @Test
-    void testRespAddTrace_WithValidData_ShouldAddTraceToAllResponses() {
+    void testRespAddTrace_WithValidData_ShouldMatchTraceByReqId() {
         // When
         traceToSourceService.respAddTrace(respList, traceList);
 
-        // Then
+        // Then: each answer gets the trace of its own request
         assertNotNull(respList);
         assertEquals(2, respList.size());
 
-        // Verify first response has trace data (from last trace source due to overwriting)
         ChatRespModelDto firstResp = respList.get(0);
-        assertEquals("Web search trace content", firstResp.getTraceSource());
-        assertEquals("web_search", firstResp.getSourceType());
+        assertEquals("Knowledge base trace content", firstResp.getTraceSource());
+        assertEquals("knowledge_base", firstResp.getSourceType());
 
-        // Verify second response has trace data (from last trace source due to overwriting)
         ChatRespModelDto secondResp = respList.get(1);
         assertEquals("Web search trace content", secondResp.getTraceSource());
         assertEquals("web_search", secondResp.getSourceType());
@@ -146,11 +144,10 @@ class TraceToSourceServiceImplTest {
         // When
         traceToSourceService.respAddTrace(respList, traceListWithNull);
 
-        // Then
-        // Should have data from last non-null trace source
+        // Then: null entries are skipped, the others still match by reqId
         ChatRespModelDto firstResp = respList.get(0);
-        assertEquals("Web search trace content", firstResp.getTraceSource());
-        assertEquals("web_search", firstResp.getSourceType());
+        assertEquals("Knowledge base trace content", firstResp.getTraceSource());
+        assertEquals("knowledge_base", firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
         assertEquals("Web search trace content", secondResp.getTraceSource());
@@ -181,22 +178,21 @@ class TraceToSourceServiceImplTest {
     }
 
     @Test
-    void testRespAddTrace_WithSingleTrace_ShouldApplyToAllResponses() {
+    void testRespAddTrace_WithSingleTrace_ShouldApplyOnlyToItsRequest() {
         // Given
         List<ChatTraceSource> singleTraceList = Collections.singletonList(traceSource1);
 
         // When
         traceToSourceService.respAddTrace(respList, singleTraceList);
 
-        // Then
-        // Both responses should have the same trace data
+        // Then: only the answer of request 100 gets it
         ChatRespModelDto firstResp = respList.get(0);
         assertEquals("Knowledge base trace content", firstResp.getTraceSource());
         assertEquals("knowledge_base", firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals("Knowledge base trace content", secondResp.getTraceSource());
-        assertEquals("knowledge_base", secondResp.getSourceType());
+        assertNull(secondResp.getTraceSource());
+        assertNull(secondResp.getSourceType());
     }
 
     @Test
@@ -210,8 +206,8 @@ class TraceToSourceServiceImplTest {
         // Then
         assertEquals(1, singleRespList.size());
         ChatRespModelDto response = singleRespList.get(0);
-        assertEquals("Web search trace content", response.getTraceSource());
-        assertEquals("web_search", response.getSourceType());
+        assertEquals("Knowledge base trace content", response.getTraceSource());
+        assertEquals("knowledge_base", response.getSourceType());
     }
 
     @Test
@@ -219,7 +215,7 @@ class TraceToSourceServiceImplTest {
         // Given
         ChatTraceSource nullContentTrace = new ChatTraceSource();
         nullContentTrace.setId(3L);
-        nullContentTrace.setReqId(300L);
+        nullContentTrace.setReqId(100L);
         nullContentTrace.setType("null_content_type");
         nullContentTrace.setContent(null); // Null content
 
@@ -235,7 +231,7 @@ class TraceToSourceServiceImplTest {
 
         ChatRespModelDto secondResp = respList.get(1);
         assertNull(secondResp.getTraceSource());
-        assertEquals("null_content_type", secondResp.getSourceType());
+        assertNull(secondResp.getSourceType());
     }
 
     @Test
@@ -243,7 +239,7 @@ class TraceToSourceServiceImplTest {
         // Given
         ChatTraceSource nullTypeTrace = new ChatTraceSource();
         nullTypeTrace.setId(3L);
-        nullTypeTrace.setReqId(300L);
+        nullTypeTrace.setReqId(100L);
         nullTypeTrace.setType(null); // Null type
         nullTypeTrace.setContent("Some content");
 
@@ -258,7 +254,7 @@ class TraceToSourceServiceImplTest {
         assertNull(firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals("Some content", secondResp.getTraceSource());
+        assertNull(secondResp.getTraceSource());
         assertNull(secondResp.getSourceType());
     }
 
@@ -267,7 +263,7 @@ class TraceToSourceServiceImplTest {
         // Given
         ChatTraceSource emptyStringTrace = new ChatTraceSource();
         emptyStringTrace.setId(3L);
-        emptyStringTrace.setReqId(300L);
+        emptyStringTrace.setReqId(100L);
         emptyStringTrace.setType(""); // Empty type
         emptyStringTrace.setContent(""); // Empty content
 
@@ -282,8 +278,8 @@ class TraceToSourceServiceImplTest {
         assertEquals("", firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals("", secondResp.getTraceSource());
-        assertEquals("", secondResp.getSourceType());
+        assertNull(secondResp.getTraceSource());
+        assertNull(secondResp.getSourceType());
     }
 
     @Test
@@ -291,7 +287,7 @@ class TraceToSourceServiceImplTest {
         // Given
         ChatTraceSource specialCharTrace = new ChatTraceSource();
         specialCharTrace.setId(3L);
-        specialCharTrace.setReqId(300L);
+        specialCharTrace.setReqId(100L);
         specialCharTrace.setType("special_chars");
         // Test data with special characters
         specialCharTrace.setContent("Content with special chars: \"quotes\", {brackets}, [arrays], & symbols! 中文内容 🚀");
@@ -309,8 +305,8 @@ class TraceToSourceServiceImplTest {
         assertEquals("special_chars", firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals(expectedContent, secondResp.getTraceSource());
-        assertEquals("special_chars", secondResp.getSourceType());
+        assertNull(secondResp.getTraceSource());
+        assertNull(secondResp.getSourceType());
     }
 
     @Test
@@ -324,7 +320,7 @@ class TraceToSourceServiceImplTest {
 
         ChatTraceSource longContentTrace = new ChatTraceSource();
         longContentTrace.setId(3L);
-        longContentTrace.setReqId(300L);
+        longContentTrace.setReqId(100L);
         longContentTrace.setType("long_content");
         longContentTrace.setContent(longContent);
 
@@ -340,23 +336,24 @@ class TraceToSourceServiceImplTest {
         assertTrue(firstResp.getTraceSource().length() > 30000);
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals(longContent, secondResp.getTraceSource());
-        assertEquals("long_content", secondResp.getSourceType());
-        assertTrue(secondResp.getTraceSource().length() > 30000);
+        assertNull(secondResp.getTraceSource());
     }
 
     @Test
-    void testRespAddTrace_OverwriteBehavior_ShouldUseLastTraceSource() {
+    void testRespAddTrace_SameRequest_ShouldUseLastTraceSource() {
         // Given - Multiple trace sources to verify overwrite behavior
         ChatTraceSource trace1 = new ChatTraceSource();
+        trace1.setReqId(100L);
         trace1.setType("type1");
         trace1.setContent("content1");
 
         ChatTraceSource trace2 = new ChatTraceSource();
+        trace2.setReqId(100L);
         trace2.setType("type2");
         trace2.setContent("content2");
 
         ChatTraceSource trace3 = new ChatTraceSource();
+        trace3.setReqId(100L);
         trace3.setType("type3");
         trace3.setContent("content3");
 
@@ -368,13 +365,12 @@ class TraceToSourceServiceImplTest {
         // When
         traceToSourceService.respAddTrace(respList, multipleTraces);
 
-        // Then - Should have values from the last trace source
+        // Then - the last trace of the same request wins; other requests are untouched
         ChatRespModelDto firstResp = respList.get(0);
         assertEquals("content3", firstResp.getTraceSource());
         assertEquals("type3", firstResp.getSourceType());
 
         ChatRespModelDto secondResp = respList.get(1);
-        assertEquals("content3", secondResp.getTraceSource());
-        assertEquals("type3", secondResp.getSourceType());
+        assertNull(secondResp.getTraceSource());
     }
 }

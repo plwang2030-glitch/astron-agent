@@ -31,4 +31,14 @@ public interface VoiceService {
      * @return List of PronunciationPersonConfig objects representing available voice configurations
      */
     List<PronunciationPersonConfig> getPronunciationPerson();
+
+    /**
+     * Built-in Doubao Speech voices matching the configured TTS resource (seed-tts-1.0 or
+     * seed-tts-2.0), used when 「AI 能力配置 - 语音合成」 routes to Volcengine.
+     *
+     * @param ttsResourceId configured {@code X-Api-Resource-Id}
+     * @param defaultSpeaker configured default speaker, listed first when not built in
+     * @return voices with {@code voiceType} set to the Doubao speaker id
+     */
+    List<PronunciationPersonConfig> getVolcenginePronunciationPerson(String ttsResourceId, String defaultSpeaker);
 }

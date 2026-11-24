@@ -1,4 +1,4 @@
-import http from '@/utils/http';
+import http, { AI_GENERATE_TIMEOUT } from '@/utils/http';
 
 interface PersonalityType {
   id: string;
@@ -60,6 +60,7 @@ export const generatePersonalityContent = (params: {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: AI_GENERATE_TIMEOUT,
   });
 };
 
@@ -82,5 +83,6 @@ export const polishPersonalityContent = (params: {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: AI_GENERATE_TIMEOUT,
   });
 };

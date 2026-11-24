@@ -1,4 +1,5 @@
 import { getTtsSign } from '@/services/chat';
+import { getAuthorization, getFixedUrl } from '@/components/workflow/utils';
 import { message } from 'antd';
 import { Base64 } from 'js-base64';
 
@@ -156,6 +157,10 @@ class Experience {
   private playTimeout: NodeJS.Timeout | undefined;
   private flag: boolean = false;
   private firstBufferWaitStartMs: number | null = null; // 首次播放的预缓冲起始时间
+  // 火山引擎（豆包语音）：通过后端 NDJSON 流式返回 16k PCM
+  private volcAbort: AbortController | null = null;
+  private volcStreaming: boolean = false;
+  private volcCarry: number | null = null;
 
   constructor({
     speed = 50,
@@ -234,6 +239,10 @@ class Experience {
         const appId = result.appId;
         const url = result.url;
         const type = result.type;
+        if (type === 'VOLCENGINE') {
+          void this.streamVolcengine(url);
+          return;
+        }
         this.connectWebsocket(url, appId, type);
       })
       .catch(err => {
@@ -325,44 +334,7 @@ class Experience {
       const jsonData: WebSocketResponse = JSON.parse(e.data);
       const audioData = jsonData?.payload?.audio?.audio;
       if (audioData) {
-        const s16 = this.base64ToS16(audioData);
-        const f32 = this.transS16ToF32(s16);
-        this.audioDatas.push(f32);
-
-        // 首包：按数据量自适应预缓冲，避免启动后断流
-        if (this.audioDatas.length === 1) {
-          clearTimeout(this.playTimeout);
-
-          if (this.firstBufferWaitStartMs == null) {
-            this.firstBufferWaitStartMs = Date.now();
-          }
-          const tryStart = () => {
-            // 计算当前可用的帧数
-            let frames = 0;
-            for (
-              let i = this.audioDatasIndex;
-              i < this.audioDatas.length;
-              i++
-            ) {
-              const chunk = this.audioDatas[i];
-              if (chunk) frames += chunk.length;
-            }
-            const waited = Date.now() - (this.firstBufferWaitStartMs || 0);
-
-            //缓冲判断，确保有足够数据再开始
-            const hasEnoughBuffer = frames >= START_MIN_FRAMES;
-            const hasWaitedTooLong = waited >= MAX_WAIT_MS;
-            const hasMinimumBuffer = frames >= MIN_PLAYABLE_FRAMES;
-
-            if ((hasEnoughBuffer || hasWaitedTooLong) && hasMinimumBuffer) {
-              this.firstBufferWaitStartMs = null;
-              this.playSource();
-            } else {
-              this.playTimeout = setTimeout(tryStart, 50) as NodeJS.Timeout;
-            }
-          };
-          this.playTimeout = setTimeout(tryStart, 50) as NodeJS.Timeout;
-        }
+        this.handleAudioChunk(audioData);
       }
       // 合成结束
       if (jsonData?.header?.status === 2 || jsonData?.data?.status === 2) {
@@ -378,6 +350,165 @@ class Experience {
     this.websocket.onclose = (e: CloseEvent) => {
       console.log(e);
     };
+  }
+
+  // 处理一段 base64 编码的 16k PCM 音频，首包自适应预缓冲后开始播放
+  handleAudioChunk(audioData: string): void {
+    this.pushPcm(this.base64ToS16(audioData));
+  }
+
+  pushPcm(s16: Int16Array): void {
+    if (s16.length === 0) return;
+    const f32 = this.transS16ToF32(s16);
+    this.audioDatas.push(f32);
+
+    // 首包：按数据量自适应预缓冲，避免启动后断流
+    if (this.audioDatas.length === 1) {
+      clearTimeout(this.playTimeout);
+
+      if (this.firstBufferWaitStartMs == null) {
+        this.firstBufferWaitStartMs = Date.now();
+      }
+      const tryStart = () => {
+        // 计算当前可用的帧数
+        let frames = 0;
+        for (let i = this.audioDatasIndex; i < this.audioDatas.length; i++) {
+          const chunk = this.audioDatas[i];
+          if (chunk) frames += chunk.length;
+        }
+        const waited = Date.now() - (this.firstBufferWaitStartMs || 0);
+
+        //缓冲判断，确保有足够数据再开始
+        const hasEnoughBuffer = frames >= START_MIN_FRAMES;
+        const hasWaitedTooLong = waited >= MAX_WAIT_MS;
+        const hasMinimumBuffer = frames >= MIN_PLAYABLE_FRAMES;
+
+        // 合成已结束但总时长不足最小缓冲时也直接播放，避免短文本一直等待
+        const streamFinished = !this.isReceiving() && frames > 0;
+        if (
+          ((hasEnoughBuffer || hasWaitedTooLong) && hasMinimumBuffer) ||
+          streamFinished
+        ) {
+          this.firstBufferWaitStartMs = null;
+          this.playSource();
+        } else {
+          this.playTimeout = setTimeout(tryStart, 50) as NodeJS.Timeout;
+        }
+      };
+      this.playTimeout = setTimeout(tryStart, 50) as NodeJS.Timeout;
+    }
+  }
+
+  // 是否仍在接收音频数据（讯飞 WebSocket 或火山引擎流）
+  isReceiving(): boolean {
+    return this.volcStreaming || this.websocket?.readyState === WebSocket.OPEN;
+  }
+
+  // 火山引擎（豆包语音）流式合成：后端按行返回 {"code":0,"data":"<base64 pcm>"}
+  async streamVolcengine(path: string): Promise<void> {
+    if (this.playState === 'unTTS') {
+      this.resetAudio();
+      return;
+    }
+    const controller = new AbortController();
+    this.volcAbort = controller;
+    this.volcStreaming = true;
+    this.volcCarry = null;
+    let failed = false;
+    try {
+      const response = await fetch(getFixedUrl(path), {
+        method: 'POST',
+        headers: {
+          Authorization: getAuthorization(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: this.text,
+          speaker: this.voiceName,
+          speed: this.speed,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`TTS request failed: ${response.status}`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!this.handleVolcLine(line)) {
+            failed = true;
+          }
+        }
+      }
+      if (pending.trim() && !this.handleVolcLine(pending)) {
+        failed = true;
+      }
+    } catch (err) {
+      if ((err as Error)?.name !== 'AbortError') {
+        console.error('Volcengine TTS failed', err);
+        failed = true;
+      }
+    } finally {
+      if (this.volcAbort === controller) {
+        this.volcAbort = null;
+        this.volcStreaming = false;
+      }
+    }
+    if (failed && this.audioDatas.length === 0) {
+      message.error('语音合成失败，请检查火山引擎（字节）豆包语音配置');
+      this.resetAudio();
+      this.close?.();
+    }
+  }
+
+  // 豆包语音分片可能是奇数字节，保留末尾 1 字节拼到下一片
+  volcBase64ToS16(b64: string): Int16Array {
+    const decoded = window.atob(b64);
+    const carry = this.volcCarry;
+    const total = decoded.length + (carry === null ? 0 : 1);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    if (carry !== null) {
+      bytes[0] = carry;
+      offset = 1;
+    }
+    for (let i = 0; i < decoded.length; i++) {
+      bytes[offset + i] = decoded.charCodeAt(i);
+    }
+    const even = total - (total % 2);
+    this.volcCarry = total % 2 === 1 ? (bytes[total - 1] ?? null) : null;
+    return new Int16Array(bytes.buffer, 0, even / 2);
+  }
+
+  // 返回 false 表示服务端返回错误
+  handleVolcLine(line: string): boolean {
+    const text = line.trim();
+    if (!text) return true;
+    try {
+      const obj = JSON.parse(text) as {
+        code?: number;
+        data?: string;
+        message?: string;
+      };
+      if (obj.data) {
+        this.pushPcm(this.volcBase64ToS16(obj.data));
+      }
+      const code = obj.code ?? 0;
+      if (code !== 0 && code !== 20000000) {
+        console.error('Volcengine TTS error', code, obj.message);
+        return false;
+      }
+    } catch (e) {
+      console.error('Failed to parse Volcengine TTS line', e);
+    }
+    return true;
   }
 
   // 编码文本
@@ -420,8 +551,15 @@ class Experience {
     this.audioDatasIndex = 0;
     this.audioDatas = [];
     this.websocket && this.websocket.close();
+    this.abortVolcengine();
     clearTimeout(this.playTimeout);
     this.firstBufferWaitStartMs = null;
+  }
+
+  abortVolcengine(): void {
+    this.volcAbort?.abort();
+    this.volcAbort = null;
+    this.volcStreaming = false;
   }
 
   audioPlay(): void {
@@ -459,6 +597,7 @@ class Experience {
         this.audioDatasIndex = 0;
         this.audioDatas = [];
         this.websocket && this.websocket.close();
+        this.abortVolcengine();
         source && source.stop();
       } catch (e) {
         console.log(e);
@@ -489,7 +628,7 @@ class Experience {
     }
 
     // ⭐ 优化：确保有足够的数据再播放，避免播放过短的片段导致破音
-    const isWebSocketOpen = this.websocket?.readyState === WebSocket.OPEN;
+    const isWebSocketOpen = this.isReceiving();
     if (bufferLength < MIN_PLAYABLE_FRAMES && isWebSocketOpen) {
       // 数据太少且还在接收中，等待更多数据
       clearTimeout(this.playTimeout);
@@ -537,7 +676,7 @@ class Experience {
         if (this.playState === 'play') {
           this.playSource();
         }
-      } else if (this.websocket?.readyState === WebSocket.OPEN) {
+      } else if (this.isReceiving()) {
         // 没有更多数据但WebSocket还开着，快速轮询等待新数据
         this.playTimeout = setTimeout(() => {
           if (this.playState === 'play') {

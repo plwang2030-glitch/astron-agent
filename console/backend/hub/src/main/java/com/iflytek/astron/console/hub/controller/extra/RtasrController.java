@@ -3,6 +3,10 @@ package com.iflytek.astron.console.hub.controller.extra;
 import cn.xfyun.util.CryptTools;
 import com.iflytek.astron.console.commons.annotation.RateLimit;
 import com.iflytek.astron.console.commons.response.ApiResult;
+import com.iflytek.astron.console.commons.util.RequestContextUtil;
+import com.iflytek.astron.console.hub.service.volcengine.VolcAsrTicketService;
+import com.iflytek.astron.console.hub.websocket.VolcAsrWebSocketConfig;
+import com.iflytek.astron.console.toolkit.entity.platform.AiCapability;
 import com.iflytek.astron.console.toolkit.entity.platform.PlatformAccountConfigDto;
 import com.iflytek.astron.console.toolkit.service.platform.PlatformAccountService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -32,6 +36,9 @@ public class RtasrController {
     @Resource
     private PlatformAccountService platformAccountService;
 
+    @Resource
+    private VolcAsrTicketService volcAsrTicketService;
+
     private static final String RTASR_URL = "wss://rtasr.xfyun.cn/v1/ws";
 
     /**
@@ -41,6 +48,17 @@ public class RtasrController {
     @RequestMapping(value = "/rtasr-sign", method = RequestMethod.POST)
     @RateLimit
     public ApiResult<Object> rtasrSign() {
+        if (platformAccountService.routesToVolcengine(AiCapability.ASR)) {
+            // Fail fast with the standard "not configured" error before the browser opens the socket.
+            platformAccountService.requireVolcengineSpeech();
+            String uid = RequestContextUtil.getUID();
+            Map<String, String> resultMap = new HashMap<>(4);
+            resultMap.put("provider", "volcengine");
+            resultMap.put("url", VolcAsrWebSocketConfig.PATH);
+            resultMap.put("ticket", volcAsrTicketService.issue(uid));
+            log.info("Issued Volcengine ASR ticket, uid={}", uid);
+            return ApiResult.success(resultMap);
+        }
         // Get signature and other prerequisite parameters
         PlatformAccountConfigDto.IflytekOpenPlatformConfig config =
                 platformAccountService.requireIflytekOpenPlatform();

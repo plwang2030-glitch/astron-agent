@@ -10,15 +10,22 @@ from typing import Any, Dict, Optional
 from common.otlp.log_trace.node_trace_log import NodeTraceLog
 from common.otlp.metrics.meter import Meter
 from fastapi import Request
+from loguru import logger as log
 from plugin.aitools.api.decorators.api_service import api_service
 from plugin.aitools.api.schemas.types import BaseResponse, SuccessResponse
 from plugin.aitools.common.clients.adapters import SpanLike
 from plugin.aitools.common.clients.safe_download import fetch_public_resource
+from plugin.aitools.common.clients.volcengine_client import ark_vision_chat
 from plugin.aitools.common.clients.websockets_client import WebSocketClient
 from plugin.aitools.common.exceptions.error.code_enums import CodeEnums
 from plugin.aitools.common.exceptions.exceptions import ServiceException
 from plugin.aitools.const.const import IMAGE_UNDERSTANDING_URL_KEY
-from plugin.aitools.platform_account_config import get_iflytek_open_platform_credentials
+from plugin.aitools.platform_account_config import (
+    CAPABILITY_IMAGE_UNDERSTANDING,
+    get_iflytek_open_platform_credentials,
+    get_volcengine_ark_config,
+    uses_volcengine,
+)
 from pydantic import BaseModel
 
 
@@ -71,6 +78,19 @@ async def image_understanding_service(
     meter: Optional[Meter] = None,
     node_trace: Optional[NodeTraceLog] = None,
 ) -> BaseResponse:
+    if uses_volcengine(CAPABILITY_IMAGE_UNDERSTANDING):
+        ark_config = get_volcengine_ark_config()
+        log.info(
+            f"Image understanding routed to volcengine, model={ark_config.vision_model}"
+        )
+        image_bytes = await fetch_public_resource(body.image_url, span)
+        answer = await ark_vision_chat(ark_config, body.question, image_bytes, span)
+        if not answer:
+            raise ServiceException.from_error_code(
+                CodeEnums.ServiceResponseError, extra_message="返回结果为空"
+            )
+        return SuccessResponse(data={"content": answer}, sid=request.state.sid)
+
     imageunderstanding_url = os.getenv(IMAGE_UNDERSTANDING_URL_KEY, "")
     credentials = get_iflytek_open_platform_credentials()
 

@@ -944,6 +944,20 @@ public class ModelService extends ServiceImpl<ModelMapper, Model> {
         if (userInfo == null || !Objects.equals(userInfo.getUid(), authenticatedUid)) {
             throw new BusinessException(ResponseEnum.UNAUTHORIZED);
         }
+        return getRuntimeModelDetailForUser(modelId, userInfo, authorizedSpaceId);
+    }
+
+    /**
+     * Same as {@link #getRuntimeModelDetail(Long, String, Long)} for server-side jobs that act for a
+     * user without an HTTP request (e.g. the scheduled A-share review). {@code user} must be loaded
+     * from the database from server-side state, never built from client input; the same access rules
+     * apply.
+     */
+    public LLMInfoVo getRuntimeModelDetailForUser(Long modelId, UserInfo userInfo, Long authorizedSpaceId) {
+        if (userInfo == null || StringUtils.isBlank(userInfo.getUid())) {
+            throw new BusinessException(ResponseEnum.UNAUTHORIZED);
+        }
+        String authenticatedUid = userInfo.getUid();
 
         Model model = findAccessibleModel(modelId, authenticatedUid, authorizedSpaceId);
         if (model == null) {
@@ -967,6 +981,19 @@ public class ModelService extends ServiceImpl<ModelMapper, Model> {
         if (userInfo == null || !Objects.equals(userInfo.getUid(), authenticatedUid)) {
             throw new BusinessException(ResponseEnum.UNAUTHORIZED);
         }
+        return getRuntimeModelDetailForPublishedBotForUser(modelId, userInfo, publisherUid);
+    }
+
+    /**
+     * Same as {@link #getRuntimeModelDetailForPublishedBot(Long, String, String)} for server-side jobs
+     * without an HTTP request; {@code user} must come from the database, never from client input.
+     */
+    public LLMInfoVo getRuntimeModelDetailForPublishedBotForUser(Long modelId, UserInfo userInfo,
+            String publisherUid) {
+        if (userInfo == null || StringUtils.isBlank(userInfo.getUid())) {
+            throw new BusinessException(ResponseEnum.UNAUTHORIZED);
+        }
+        String authenticatedUid = userInfo.getUid();
         if (modelId == null || StringUtils.isBlank(publisherUid)) {
             throw new BusinessException(ResponseEnum.MODEL_NOT_EXIST);
         }

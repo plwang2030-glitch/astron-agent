@@ -65,7 +65,8 @@ public class RpaHandler {
                 "Authorization", "Bearer " + key,
                 "Accept", "application/json; charset=utf-8");
 
-        log.info("getRpaList -> url: {}, headers: {}", url, headers);
+        // Never log the headers: they carry the user's RPA platform API key.
+        log.info("getRpaList -> url: {}", url);
 
         // 3) Call downstream API and parse response
         final String resp;

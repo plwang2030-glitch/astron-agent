@@ -210,6 +210,27 @@ public class KnowledgeV2ServiceCallHandler {
         return JSON.parseObject(respData, KnowledgeResponse.class);
     }
 
+    /**
+     * List documents of a provider-managed knowledge base (Volcengine-RAG). Response data:
+     * {@code {"docs":[...],"total":n}}.
+     */
+    public KnowledgeResponse listProviderDocs(String ragType, String repoId, int offset, int limit) {
+        String url = apiUrl.getKnowledgeUrl().concat("/v1/document/list");
+        Map<String, String> headers = buildKnowledgeHeaders(ragType);
+        JSONObject body = new JSONObject()
+                .fluentPut("ragType", ragType)
+                .fluentPut("repoId", repoId)
+                .fluentPut("offset", offset)
+                .fluentPut("limit", limit);
+        log.info("listProviderDocs url = {}, ragType = {}, repoId = {}, offset = {}, limit = {}",
+                url, ragType, repoId, offset, limit);
+        String resp = postJson(url, headers, body.toJSONString());
+        KnowledgeResponse parsed = JSON.parseObject(resp, KnowledgeResponse.class);
+        log.info("listProviderDocs response code = {}, message = {}",
+                parsed == null ? null : parsed.getCode(), parsed == null ? null : parsed.getMessage());
+        return parsed;
+    }
+
     private String postJson(String url, String reqBody) {
         return OkHttpUtil.post(url, reqBody);
     }
@@ -230,6 +251,13 @@ public class KnowledgeV2ServiceCallHandler {
             if (StringUtils.isNotBlank(ragflow.getDefaultGroup())) {
                 headers.put("x-ragflow-default-group", ragflow.getDefaultGroup());
             }
+            return headers;
+        }
+        if (ProjectContent.isVolcengineRag(ragType)) {
+            PlatformAccountConfigDto.VolcengineConfig volc = platformAccountService.requireVolcengineKnowledge();
+            headers.put("x-volc-knowledge-api-key", volc.getKnowledgeApiKey());
+            headers.put("x-volc-knowledge-host", volc.getKnowledgeHost());
+            headers.put("x-volc-knowledge-project", volc.getKnowledgeProject());
             return headers;
         }
         if (ProjectContent.FILE_SOURCE_CBG_RAG_STR.equals(ragType)) {

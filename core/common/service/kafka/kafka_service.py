@@ -7,6 +7,10 @@ from loguru import logger
 from common.service.base import Service, ServiceType
 
 
+def _kafka_enabled() -> bool:
+    return os.getenv("KAFKA_ENABLE", "false").lower() in ("true", "1", "yes", "on")
+
+
 class KafkaProducerService(Service):
     name = ServiceType.KAFKA_PRODUCER_SERVICE  # type: ignore[report-untyped-call]
 
@@ -16,7 +20,13 @@ class KafkaProducerService(Service):
         :param config: Kafka 配置
         """
         self.config = config
-        self.producer = Producer(**config)
+        self.producer: Optional[Producer] = None
+        # librdkafka connects in the background as soon as a Producer exists, so a
+        # disabled deployment would keep retrying an unreachable broker forever.
+        if _kafka_enabled():
+            self.producer = Producer(**config)
+        else:
+            logger.info("Kafka is disabled (KAFKA_ENABLE), producer not created")
 
     def send(
         self,
@@ -32,12 +42,7 @@ class KafkaProducerService(Service):
         :param callback: 回调函数
         :param timeout: poll timeout (秒)
         """
-        if os.getenv("KAFKA_ENABLE", "false").lower() not in (
-            "true",
-            "1",
-            "yes",
-            "on",
-        ):
+        if not _kafka_enabled() or self.producer is None:
             return
 
         if not timeout:

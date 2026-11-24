@@ -116,6 +116,10 @@ public class BotInfoDto {
     private String tools;
 
     private String workflows;
+    private String agents;
+    private Integer autoTeam;
+    private Integer deepThinking;
+    private String builtinTools;
 
     private String vcnCn;
 

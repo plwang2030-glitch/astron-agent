@@ -353,6 +353,7 @@ export const zh = {
     resourceManagement: '资源管理',
     appManagement: '应用管理',
     platformAccountManagement: '平台账号管理',
+    aShareTrading: '模拟炒股',
 
     // 订单类型相关翻译
     orderTypes: {
@@ -379,7 +380,7 @@ export const zh = {
     teamEnterpriseEdition: '团队/企业版',
 
     // 品牌名称
-    xingchen: '星辰',
+    xingchen: 'SkyLumin',
   },
 
   // 空间管理相关

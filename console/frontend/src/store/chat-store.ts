@@ -6,6 +6,7 @@ import type {
   Option,
   UploadFileInfo,
 } from '@/types/chat';
+import { applyTeamEvent as reduceTeam } from '@/types/team';
 const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   // 状态
   messageList: [],
@@ -91,6 +92,7 @@ const useChatStore = create<ChatState & ChatActions>((set, get) => ({
           tools: state.currentToolName ? [state.currentToolName] : [],
           traceSource: state.traceSource,
           reasoning: state.deepThinkText,
+          team: state.team,
         };
         return {
           messageList: updatedMessageList,
@@ -129,6 +131,7 @@ const useChatStore = create<ChatState & ChatActions>((set, get) => ({
           sourceType: '',
           deepThinkText: '',
           currentToolName: '',
+          team: undefined,
           streamId: '',
         };
       }
@@ -139,6 +142,7 @@ const useChatStore = create<ChatState & ChatActions>((set, get) => ({
         traceSource: '',
         deepThinkText: '',
         currentToolName: '',
+        team: undefined,
         streamId: '',
       };
     }),
@@ -167,6 +171,8 @@ const useChatStore = create<ChatState & ChatActions>((set, get) => ({
   setIsLoading: (isLoading: boolean): void => set({ isLoading }), //正在加载，未吐字
   setCurrentToolName: (currentToolName: string): void =>
     set({ currentToolName }),
+  applyTeamEvent: (event): void =>
+    set(state => ({ team: reduceTeam(state.team, event) })),
   setTraceSource: (traceSource: string): void => set({ traceSource }),
   setDeepThinkText: (deepThinkText: string): void =>
     set(state => ({ deepThinkText: state.deepThinkText + deepThinkText })),

@@ -297,3 +297,29 @@ export async function getRepoUseStatus(
 ): Promise<RepoUseStatusResponse> {
   return await http.get(`/repo/get-repo-use-status`, { params });
 }
+
+/** Knowledge type bound to an existing Volcengine (VikingDB) knowledge base. */
+export const VOLCENGINE_RAG = 'Volcengine-RAG';
+
+export interface VolcengineDoc {
+  docId: string;
+  name: string;
+  type?: string;
+  size?: number | null;
+  pointNum?: number | null;
+  /** Volcengine doc process status; 0 means processed */
+  processStatus?: number | null;
+  failedMsg?: string | null;
+  createTime?: number | null;
+  updateTime?: number | null;
+  source?: string;
+}
+
+/** Documents of a bound Volcengine knowledge base (read-only). */
+export async function listVolcengineDocs(params: {
+  id: string | number;
+  offset: number;
+  limit: number;
+}): Promise<{ docs: VolcengineDoc[]; total: number }> {
+  return await http.get(`/repo/provider-docs`, { params });
+}

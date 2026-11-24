@@ -98,6 +98,11 @@ public class BotAIServiceClient {
             .writeTimeout(60, TimeUnit.SECONDS)
             .build();
 
+    /** Seedream at 2K can take longer than the Spark image API. */
+    private final OkHttpClient volcImageHttpClient = httpClient.newBuilder()
+            .readTimeout(120, TimeUnit.SECONDS)
+            .build();
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Resource
@@ -174,6 +179,78 @@ public class BotAIServiceClient {
             log.error("Image generation request failed, user [{}]", uid, e);
             throw new BusinessException(ResponseEnum.SYSTEM_ERROR);
         }
+    }
+
+    /**
+     * Image generation with Volcengine Ark Seedream ({@code POST /images/generations}). The image is
+     * returned inline as base64 so callers do not depend on Ark's temporary download URL.
+     *
+     * @param uid User ID (logging only)
+     * @param prompt Generation prompt
+     * @param size Seedream size, e.g. {@code 2K} or {@code 2048x2048}
+     * @return Base64-encoded image
+     */
+    public String generateImageWithVolcengine(String uid, String prompt, String size) {
+        if (uid == null || StrUtil.isBlank(prompt)) {
+            throw new IllegalArgumentException("User ID and prompt cannot be empty");
+        }
+        PlatformAccountConfigDto.VolcengineConfig config = platformAccountService.requireVolcengineArk();
+
+        JSONObject body = new JSONObject();
+        body.put("model", config.getImageModel());
+        body.put("prompt", prompt);
+        body.put("size", size);
+        body.put("response_format", "b64_json");
+        body.put("watermark", false);
+        // Not sent: a single image is the default (group output needs "auto"), and Seedream 5.5 /
+        // 5.0 pro / flash reject the parameter altogether.
+
+        Request request = new Request.Builder()
+                .url(config.getArkBaseUrl() + "/images/generations")
+                .header("Authorization", "Bearer " + config.getArkApiKey())
+                .post(RequestBody.create(body.toJSONString(), MediaType.get("application/json; charset=utf-8")))
+                .build();
+        long start = System.currentTimeMillis();
+        log.info("Volcengine image generation started, user [{}], model={}, size={}", uid, config.getImageModel(), size);
+        try (Response response = volcImageHttpClient.newCall(request).execute()) {
+            ResponseBody responseBody = response.body();
+            String text = responseBody == null ? "" : responseBody.string();
+            JSONObject result = StrUtil.isBlank(text) ? new JSONObject() : JSONObject.parseObject(text);
+            JSONObject error = result.getJSONObject("error");
+            if (!response.isSuccessful() || error != null) {
+                String code = error == null ? String.valueOf(response.code()) : error.getString("code");
+                log.error("Volcengine image generation failed, user [{}], httpStatus={}, code={}, message={}",
+                        uid, response.code(), code, error == null ? response.message() : error.getString("message"));
+                throw new BusinessException(convertVolcImageErrorCode(code));
+            }
+            JSONArray data = result.getJSONArray("data");
+            String base64 = data == null || data.isEmpty() ? null : data.getJSONObject(0).getString("b64_json");
+            if (StrUtil.isBlank(base64)) {
+                log.error("Volcengine image generation returned no image, user [{}]", uid);
+                throw new BusinessException(ResponseEnum.SYSTEM_ERROR);
+            }
+            log.info("Volcengine image generation completed, user [{}], costMs={}, base64Length={}",
+                    uid, System.currentTimeMillis() - start, base64.length());
+            return base64;
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Volcengine image generation request failed, user [{}]", uid, e);
+            throw new BusinessException(ResponseEnum.SYSTEM_ERROR);
+        }
+    }
+
+    private ResponseEnum convertVolcImageErrorCode(String code) {
+        if (StrUtil.isBlank(code)) {
+            return ResponseEnum.SYSTEM_ERROR;
+        }
+        if (code.startsWith("InputTextSensitiveContentDetected") || code.startsWith("InputImageSensitiveContentDetected")) {
+            return ResponseEnum.SPARK_API_IMAGE_INPUT_AUDIT_FAILED;
+        }
+        if (code.startsWith("OutputImageSensitiveContentDetected")) {
+            return ResponseEnum.SPARK_API_IMAGE_AUDIT_FAILED;
+        }
+        return ResponseEnum.SYSTEM_ERROR;
     }
 
     /**

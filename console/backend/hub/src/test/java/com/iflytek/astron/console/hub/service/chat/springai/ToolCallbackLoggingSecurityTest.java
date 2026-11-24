@@ -57,7 +57,8 @@ class ToolCallbackLoggingSecurityTest {
             assertThat(webSearch.call("{\"query\":\"" + sentinel))
                     .isEqualTo("No query provided.");
             assertThat(webSearch.call(new JSONObject().fluentPut("query", sentinel).toJSONString()))
-                    .isEqualTo("Web search failed.");
+                    .startsWith("Web search is unavailable right now.")
+                    .doesNotContain(sentinel);
 
             assertThat(new CurrentTimeToolCallback().call("{\"timezone\":\"" + sentinel))
                     .isNotBlank();

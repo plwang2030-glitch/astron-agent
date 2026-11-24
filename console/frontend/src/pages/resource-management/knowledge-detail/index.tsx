@@ -9,6 +9,8 @@ import HitPage from './hit-page';
 import SettingPage from './setting-page';
 import SegmentationPage from './segmentation-page';
 import FilePage from './file-page';
+import VolcengineDocs from './document-page/volcengine-docs';
+import { VOLCENGINE_RAG } from '@/services/knowledge';
 import { RepoItem } from '../../../types/resource';
 import { getRouteId } from '@/utils/utils';
 
@@ -42,7 +44,13 @@ const KnowledgeDetail: FC = () => {
         <Routes>
           <Route
             path="/:id/document"
-            element={<DocumentPage tag={tag || ''} repoId={repoId} pid={pid} />}
+            element={
+              tag === VOLCENGINE_RAG ? (
+                <VolcengineDocs repoId={repoId} knowledgeInfo={knowledgeInfo} />
+              ) : (
+                <DocumentPage tag={tag || ''} repoId={repoId} pid={pid} />
+              )
+            }
           />
           <Route path="/:id/hit" element={<HitPage repoId={repoId} />} />
           <Route

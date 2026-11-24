@@ -12,6 +12,30 @@ IFLYTEK_OPEN_PLATFORM_CACHE_KEY = "platform_account_text:iflytek_open_platform"
 PLATFORM_ACCOUNT_CATEGORY = "PLATFORM_ACCOUNT"
 IFLYTEK_OPEN_PLATFORM_CODE = "IFLYTEK_OPEN_PLATFORM"
 
+# Written by console-hub PlatformAccountService (see PlatformAccountType / AiCapability).
+VOLCENGINE_CACHE_KEY = "platform_account_text:volcengine"
+VOLCENGINE_CODE = "VOLCENGINE"
+AI_CAPABILITY_ROUTING_CACHE_KEY = "platform_account_text:ai_capability_routing"
+AI_CAPABILITY_ROUTING_CODE = "AI_CAPABILITY_ROUTING"
+
+PROVIDER_IFLYTEK = "iflytek"
+PROVIDER_VOLCENGINE = "volcengine"
+_KNOWN_PROVIDERS = (PROVIDER_IFLYTEK, PROVIDER_VOLCENGINE)
+
+# Capability keys, identical to the Java AiCapability keys.
+CAPABILITY_IMAGE_GENERATION = "imageGeneration"
+CAPABILITY_IMAGE_UNDERSTANDING = "imageUnderstanding"
+CAPABILITY_OCR = "ocr"
+CAPABILITY_TTS = "tts"
+
+# Defaults, identical to the Java VolcengineDefaults.
+VOLC_DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+VOLC_DEFAULT_CHAT_MODEL = "doubao-seed-2-1-pro-260915"
+VOLC_DEFAULT_VISION_MODEL = "doubao-seed-2-1-pro-260915"
+VOLC_DEFAULT_IMAGE_MODEL = "doubao-seedream-5-0-260128"
+VOLC_DEFAULT_TTS_RESOURCE_ID = "seed-tts-1.0"
+VOLC_DEFAULT_TTS_SPEAKER = "zh_female_shuangkuaisisi_moon_bigtts"
+
 _REDIS_CLIENT = None
 
 
@@ -20,6 +44,118 @@ class IflytekOpenPlatformCredentials:
     app_id: str
     api_key: str
     api_secret: str
+
+
+@dataclass(frozen=True)
+class VolcengineArkConfig:
+    base_url: str
+    api_key: str
+    chat_model: str
+    vision_model: str
+    image_model: str
+
+
+@dataclass(frozen=True)
+class VolcengineSpeechConfig:
+    """Doubao Speech credentials: api_key (new console) or app_id + access_token (old console)."""
+
+    api_key: str
+    app_id: str
+    access_token: str
+    tts_resource_id: str
+    tts_speaker: str
+
+
+def get_capability_provider(capability: str) -> str:
+    """Provider selected in 「AI 能力配置」; missing, blank or unknown values mean iflytek."""
+    raw_config = _load_from_redis(
+        AI_CAPABILITY_ROUTING_CACHE_KEY
+    ) or _load_from_database(
+        AI_CAPABILITY_ROUTING_CODE, AI_CAPABILITY_ROUTING_CACHE_KEY
+    )
+    config = _parse_json(raw_config)
+    provider = _clean(config.get(capability)).lower() if config else ""
+    if not provider:
+        return PROVIDER_IFLYTEK
+    if provider not in _KNOWN_PROVIDERS:
+        logger.warning(
+            f"Unknown AI provider '{provider}' for capability {capability}, "
+            "falling back to iflytek"
+        )
+        return PROVIDER_IFLYTEK
+    return provider
+
+
+def uses_volcengine(capability: str) -> bool:
+    return get_capability_provider(capability) == PROVIDER_VOLCENGINE
+
+
+def get_volcengine_ark_config() -> VolcengineArkConfig:
+    config = _load_volcengine_config()
+    api_key = _clean(config.get("arkApiKey"))
+    if not _has_text(api_key):
+        raise ServiceException.from_error_code(
+            CodeEnums.ServiceParamsError,
+            extra_message=(
+                "火山引擎（字节）方舟 API Key is not configured. "
+                "Please configure it in Platform Account Management first."
+            ),
+        )
+    base_url = _clean(config.get("arkBaseUrl")) or VOLC_DEFAULT_ARK_BASE_URL
+    return VolcengineArkConfig(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        chat_model=_clean(config.get("chatModel")) or VOLC_DEFAULT_CHAT_MODEL,
+        vision_model=_clean(config.get("visionModel")) or VOLC_DEFAULT_VISION_MODEL,
+        image_model=_clean(config.get("imageModel")) or VOLC_DEFAULT_IMAGE_MODEL,
+    )
+
+
+def get_volcengine_speech_config() -> VolcengineSpeechConfig:
+    config = _load_volcengine_config()
+    api_key = _clean(config.get("speechApiKey"))
+    app_id = _clean(config.get("speechAppId"))
+    access_token = _clean(config.get("speechAccessToken"))
+    if not _has_text(api_key) and not (_has_text(app_id) and _has_text(access_token)):
+        raise ServiceException.from_error_code(
+            CodeEnums.ServiceParamsError,
+            extra_message=(
+                "火山引擎（字节）豆包语音 is not configured. "
+                "Please configure the API Key or AppID + Access Token "
+                "in Platform Account Management first."
+            ),
+        )
+    return VolcengineSpeechConfig(
+        api_key=api_key if _has_text(api_key) else "",
+        app_id=app_id,
+        access_token=access_token,
+        tts_resource_id=_clean(config.get("ttsResourceId"))
+        or VOLC_DEFAULT_TTS_RESOURCE_ID,
+        tts_speaker=_clean(config.get("ttsSpeaker")) or VOLC_DEFAULT_TTS_SPEAKER,
+    )
+
+
+def _load_volcengine_config() -> dict:
+    raw_config = _load_from_redis(VOLCENGINE_CACHE_KEY) or _load_from_database(
+        VOLCENGINE_CODE, VOLCENGINE_CACHE_KEY
+    )
+    return _parse_json(raw_config)
+
+
+def _parse_json(raw_config: Optional[str]) -> dict:
+    if not raw_config:
+        return {}
+    try:
+        value = json.loads(raw_config)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _has_text(value: str) -> bool:
+    return (
+        bool(value) and not value.lower().startswith("your-") and value.lower() != "xxx"
+    )
 
 
 def get_iflytek_open_platform_credentials() -> IflytekOpenPlatformCredentials:
@@ -43,12 +179,12 @@ def get_iflytek_open_platform_app_id(default: str = "") -> str:
         return default
 
 
-def _load_from_redis() -> Optional[str]:
+def _load_from_redis(cache_key: str = IFLYTEK_OPEN_PLATFORM_CACHE_KEY) -> Optional[str]:
     try:
         client = _redis_client()
         if client is None:
             return None
-        value = client.get(IFLYTEK_OPEN_PLATFORM_CACHE_KEY)
+        value = client.get(cache_key)
         if isinstance(value, bytes):
             return value.decode("utf-8")
         return value
@@ -57,7 +193,10 @@ def _load_from_redis() -> Optional[str]:
         return None
 
 
-def _load_from_database() -> Optional[str]:
+def _load_from_database(
+    code: str = IFLYTEK_OPEN_PLATFORM_CODE,
+    cache_key: str = IFLYTEK_OPEN_PLATFORM_CACHE_KEY,
+) -> Optional[str]:
     try:
         import pymysql  # type: ignore[import-untyped]
 
@@ -79,12 +218,12 @@ def _load_from_database() -> Optional[str]:
                     WHERE category = %s AND code = %s AND is_valid = 1
                     LIMIT 1
                     """,
-                    (PLATFORM_ACCOUNT_CATEGORY, IFLYTEK_OPEN_PLATFORM_CODE),
+                    (PLATFORM_ACCOUNT_CATEGORY, code),
                 )
                 row = cursor.fetchone()
                 value = row.get("value") if row else None
                 if value:
-                    _store_to_redis(value)
+                    _store_to_redis(value, cache_key)
                 return value
         finally:
             connection.close()
@@ -93,11 +232,13 @@ def _load_from_database() -> Optional[str]:
         return None
 
 
-def _store_to_redis(value: str) -> None:
+def _store_to_redis(
+    value: str, cache_key: str = IFLYTEK_OPEN_PLATFORM_CACHE_KEY
+) -> None:
     try:
         client = _redis_client()
         if client is not None:
-            client.set(IFLYTEK_OPEN_PLATFORM_CACHE_KEY, value)
+            client.set(cache_key, value)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning(f"Failed to write platform account config to Redis: {exc}")
 

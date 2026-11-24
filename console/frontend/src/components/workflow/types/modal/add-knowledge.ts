@@ -46,7 +46,8 @@ export type VersionType =
   | 'AIUI-RAG2'
   | 'CBG-RAG'
   | 'SparkDesk-RAG'
-  | 'Ragflow-RAG';
+  | 'Ragflow-RAG'
+  | 'Volcengine-RAG';
 
 // 节点数据接口
 export interface NodeData {

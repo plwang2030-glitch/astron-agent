@@ -33,6 +33,7 @@ class RAGType(str, Enum):
     CBG_RAG = "CBG-RAG"
     SparkDesk_RAG = "SparkDesk-RAG"
     RagFlow_RAG = "Ragflow-RAG"
+    Volcengine_RAG = "Volcengine-RAG"
 
 
 def _require_group_for_non_ragflow(rag_type: RAGType, group: Optional[str]) -> None:
@@ -321,3 +322,21 @@ class QueryDocReq(BaseModel):
         default=None,
         description=_DATASET_ID_DESC,
     )
+
+
+class DocListReq(BaseModel):
+    """
+    Document list request model (external knowledge bases whose documents are
+    managed on the provider side, e.g. Volcengine-RAG).
+
+    Attributes:
+        ragType: RAG type
+        repoId: Knowledge base identifier understood by the strategy
+        offset: Start position, default 0
+        limit: Page size, 1~100, default 20
+    """
+
+    ragType: RAGType = Field(..., description="RAG type")
+    repoId: str = Field(..., min_length=1, description="Knowledge base identifier")
+    offset: int = Field(default=0, ge=0, description="Start position")
+    limit: int = Field(default=20, ge=1, le=100, description="Page size")

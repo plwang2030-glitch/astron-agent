@@ -169,6 +169,10 @@ export interface CreateKnowledgeParams {
   indexType?: string;
   spaceId?: string;
   appId?: string;
+  desc?: string;
+  tag?: string;
+  /** Volcengine-RAG: knowledge base name, project/name, or kb- resource id */
+  outerRepoId?: string;
 }
 
 // 更新知识库参数

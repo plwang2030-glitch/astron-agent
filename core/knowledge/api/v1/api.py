@@ -23,6 +23,7 @@ from knowledge.domain.entity.chunk_dto import (
     ChunkQueryReq,
     ChunkSaveReq,
     ChunkUpdateReq,
+    DocListReq,
     FileSplitReq,
     QueryDocReq,
     RAGType,
@@ -52,6 +53,15 @@ async def bind_platform_account_config(request: Request) -> None:
                 "dataset_id": request.headers.get("x-xinghuo-dataset-id", ""),
                 "app_id": request.headers.get("x-xinghuo-app-id", ""),
                 "app_secret": request.headers.get("x-xinghuo-app-secret", ""),
+            },
+            "volcengine": {
+                "knowledge_api_key": request.headers.get(
+                    "x-volc-knowledge-api-key", ""
+                ),
+                "knowledge_host": request.headers.get("x-volc-knowledge-host", ""),
+                "knowledge_project": request.headers.get(
+                    "x-volc-knowledge-project", ""
+                ),
             },
         }
     )
@@ -615,4 +625,47 @@ async def query_doc_name(
             docId=query_request.docId,
             group=query_request.group,
             datasetId=query_request.datasetId,
+        )
+
+
+@rag_router.post("/document/list")
+async def list_docs(
+    list_request: DocListReq,
+    app_id: str = Depends(get_app_id),
+) -> Union[SuccessDataResponse, ErrorResponse]:
+    """
+    List documents of a provider-managed knowledge base (e.g. Volcengine-RAG),
+    where documents are uploaded and chunked on the provider side.
+
+    Args:
+        list_request: Document list request parameters
+        app_id: Application identifier
+
+    Returns:
+        ``{"docs": [...], "total": int}`` or an error response
+    """
+    span, metric = get_span_and_metric(app_id=app_id, function_name="list_docs")
+
+    with span.start(func_name="list_docs") as span_context:
+        span_context.add_info_events(
+            {"rag_type": list_request.ragType.value, "repo_id": list_request.repoId}
+        )
+        strategy = RAGStrategyFactory.get_strategy(list_request.ragType)
+        operation = getattr(strategy, "list_docs", None)
+        if operation is None:
+            return ErrorResponse(
+                code_enum=CodeEnum.ParameterInvalid,
+                message=(
+                    f"{list_request.ragType.value} does not support listing "
+                    "provider-managed documents"
+                ),
+            )
+
+        return await handle_rag_operation(
+            span_context=span_context,
+            metric=metric,
+            operation_callable=operation,
+            repo_id=list_request.repoId,
+            offset=list_request.offset,
+            limit=list_request.limit,
         )

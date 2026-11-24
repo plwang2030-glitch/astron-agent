@@ -13,6 +13,7 @@ import styles from './index.module.scss';
 import { useSparkCommonStore } from '@/store/spark-store/spark-common';
 import BotCard from './bot-card';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import messageSpace from '@/assets/imgs/share-page/message_space.svg';
 import { getTextContent, createSafeHTML } from '@/utils/sanitizer';
 interface NoticeModalProps {
@@ -156,6 +157,7 @@ const NoticeModal: React.FC<NoticeModalProps> = ({
   onClose,
   onMessageRead,
 }) => {
+  const navigate = useNavigate();
   const [selectType, setSelectType] = useState<string>('0');
   const myMessage = useSparkCommonStore(state => state.myMessage);
   const setMyMessage = useSparkCommonStore(state => state.setMyMessage);
@@ -208,8 +210,14 @@ const NoticeModal: React.FC<NoticeModalProps> = ({
     setMessageDetail(messageItem.body || '');
     setSelectedId(messageItem.id);
 
-    if (payload.outlink) {
-      //
+    // 例如后台任务完成通知：跳转到对应对话
+    if (typeof payload.outlink === 'string' && payload.outlink) {
+      if (payload.outlink.startsWith('/')) {
+        onClose();
+        navigate(payload.outlink);
+      } else if (/^https?:\/\//.test(payload.outlink)) {
+        window.open(payload.outlink, '_blank', 'noopener');
+      }
     }
 
     getMessages(selectType);

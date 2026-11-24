@@ -218,6 +218,7 @@ const ChatPage = (): ReactElement => {
   const handleRecomendClick = (params: {
     item: string;
     callback?: () => void;
+    background?: boolean;
   }) => {
     if (streamId || isDataLoading || isLoading) {
       message.warning(t('chatPage.chatWindow.answeringInProgress'));
@@ -227,6 +228,7 @@ const ChatPage = (): ReactElement => {
       msg: params.item,
       workflowOperation: (workflowOperation || []).length === 0 ? '' : 'resume',
       onSendCallback: params.callback,
+      background: params.background,
     });
   };
 

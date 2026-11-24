@@ -67,7 +67,9 @@
         <mockito.version>5.12.0</mockito.version>
         <mapstruct.version>1.5.5.Final</mapstruct.version>
         <openai-java.version>4.23.0</openai-java.version>
-        <spring-ai.version>1.1.2</spring-ai.version>
+        <!-- 1.1.2 drops OpenAiChatOptions.extraBody (e.g. Ark thinking) whenever tools are attached;
+             1.1.5+ keeps it in OpenAiChatModel#createRequest. -->
+        <spring-ai.version>1.1.8</spring-ai.version>
 
         <!-- JaCoCo test coverage -->
         <jacoco.version>0.8.12</jacoco.version>

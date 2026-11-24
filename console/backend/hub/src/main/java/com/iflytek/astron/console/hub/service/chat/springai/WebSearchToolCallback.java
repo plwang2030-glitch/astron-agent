@@ -68,7 +68,10 @@ public class WebSearchToolCallback implements ToolCallback {
 
         SearchAugmentation result = managedWebSearchService.search(query, context.getUserId());
         if (result.failed()) {
-            return "Web search failed.";
+            // Spell out "do not retry": with a bare failure the model searched again with another query,
+            // and every extra round is another full model call before the user sees anything.
+            return "Web search is unavailable right now. Do not call web_search again in this turn; answer from "
+                    + "your own knowledge and briefly tell the user the answer could not be checked online.";
         }
         JSONArray toolCalls;
         try {

@@ -31,7 +31,9 @@
         <if test="includeIds!=null and includeIds.size()>0">
         or id in <foreach collection="includeIds" item="includeId" open="(" close=")" separator=",">#{includeId}</foreach>
     </if>)
-        and t3.status = 5 and deleted = 0
+        <!-- Volcengine-RAG repos keep their documents on Volcengine (no local files), so they are
+             listed without the processed-file requirement. -->
+        and (t3.status = 5 or t2.tag = 'Volcengine-RAG') and deleted = 0
         ) t1 where 1=1
         <if test="content!=null and content !=''">
             and (

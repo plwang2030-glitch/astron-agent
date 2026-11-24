@@ -4,5 +4,8 @@ public enum TtsTypeEnum {
 
     ORIGINAL,
 
-    CLONE
+    CLONE,
+
+    /** Doubao Speech TTS streamed through console-hub ({@code POST /voice/volc-tts}). */
+    VOLCENGINE
 }

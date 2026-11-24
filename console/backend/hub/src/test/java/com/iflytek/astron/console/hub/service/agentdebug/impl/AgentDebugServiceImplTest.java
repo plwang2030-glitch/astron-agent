@@ -42,6 +42,14 @@ class AgentDebugServiceImplTest {
     @InjectMocks
     private AgentDebugServiceImpl agentDebugService;
 
+    @org.junit.jupiter.api.BeforeAll
+    static void initTableInfo() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), ""),
+                AgentDebugSession.class);
+    }
+
     @Test
     void createSession_WithBotPermission_ShouldInsertNewSession() {
         when(chatBotBaseMapper.checkBotPermission(BOT_ID, UID, null)).thenReturn(1);
@@ -65,6 +73,37 @@ class AgentDebugServiceImplTest {
         assertEquals(UID, inserted.getUid());
         assertEquals(BOT_ID, inserted.getBotId());
         assertEquals("全新对话", inserted.getTitle());
+    }
+
+    @Test
+    void listSessions_ShouldPageAndCapLimit() {
+        when(chatBotBaseMapper.checkBotPermission(BOT_ID, UID, null)).thenReturn(1);
+        when(sessionMapper.selectList(any())).thenReturn(List.of());
+
+        agentDebugService.listSessions(UID, null, BOT_ID, null, 30, 500);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AgentDebugSession>> captor =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+        verify(sessionMapper).selectList(captor.capture());
+        assertTrue(captor.getValue().getSqlSegment().endsWith("LIMIT 50 OFFSET 30"),
+                captor.getValue().getSqlSegment());
+    }
+
+    @Test
+    void listSessions_WithKeyword_ShouldFilterTitleLiterally() {
+        when(chatBotBaseMapper.checkBotPermission(BOT_ID, UID, null)).thenReturn(1);
+        when(sessionMapper.selectList(any())).thenReturn(List.of());
+
+        agentDebugService.listSessions(UID, null, BOT_ID, " 50%_off ", 0, 20);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AgentDebugSession>> captor =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+        verify(sessionMapper).selectList(captor.capture());
+        assertTrue(captor.getValue().getSqlSegment().contains("LIKE"), captor.getValue().getSqlSegment());
+        assertTrue(captor.getValue().getParamNameValuePairs().containsValue("%50\\%\\_off%"),
+                captor.getValue().getParamNameValuePairs().toString());
     }
 
     @Test

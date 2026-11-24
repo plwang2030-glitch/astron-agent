@@ -25,6 +25,29 @@ const translation = {
   xinghuoKnowledge: 'Spark Knowledge Base',
   xingpuDescription:
     'integrates multi-source heterogeneous knowledge with automated ingestion, delivers conversational Q&A retrieval, and enables answer tracing. It is tailored for robust enterprise applications.',
+  volcengineShort: 'Volc',
+  volcengineKnowledge: 'Volcengine Knowledge Base',
+  volcengineKnowledgeDescription:
+    'Binds a knowledge base created in the Volcengine console. Documents are uploaded, parsed and chunked on Volcengine; this platform retrieves from it. See ',
+  volcengineNotConfigured: 'not configured',
+  volcengineKeyNotConfigured: 'Knowledge base API Key is not configured',
+  volcengineConfigHint:
+    'The Volcengine knowledge base name or ID and API Key are set under Platform Accounts - Volcengine.',
+  volcengineGoConfig: 'Configure',
+  volcengineDocsTitle: 'Volcengine documents',
+  volcengineDocsHint:
+    'Documents of this knowledge base are uploaded, parsed and managed on Volcengine and shown here read-only. Add or change documents in the Volcengine console; once processed they are available to hit tests and agents.',
+  volcengineOpenConsole: 'Open Volcengine console',
+  volcengineDocName: 'Document',
+  volcengineDocType: 'Type',
+  volcengineDocChunks: 'Chunks',
+  volcengineDocStatus: 'Status',
+  volcengineDocUpdated: 'Updated',
+  volcengineDocProcessed: 'Processed',
+  volcengineDocProcessing: 'Processing',
+  volcengineDocFailed: 'Failed',
+  volcengineDocsTotal: '{{total}} documents',
+  volcengineBoundTo: 'Bound knowledge base',
   xingchenKnowledge: 'Astra Knowledge Base',
   xingchenDescription:
     'integrates multi-source heterogeneous knowledge with automated ingestion, delivers conversational Q&A retrieval, and enables answer tracing. It is tailored for lightweight search scenarios.',

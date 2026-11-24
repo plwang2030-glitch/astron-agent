@@ -13,14 +13,12 @@ import {
 import {
   getAgentDetail,
   handleAgentStatus,
-  getPreparationData,
 } from '@/services/release-management';
 import {
   getBotInfo,
   cancelBindWx,
   // getChainInfo,
 } from '@/services/spark-common';
-import { isCanPublish } from '@/services/flow';
 import WxModal from '@/components/wx-modal';
 import { useBotStateStore } from '@/store/spark-store/bot-state';
 import RetractableInput from '@/components/ui/global/retract-table-input';
@@ -39,12 +37,18 @@ import { useTranslation } from 'react-i18next';
 import styles from './index.module.scss';
 import useScreenWidth from '@/hooks/use-screen-width';
 interface AgentListProps {
-  AgentType?: 'agent' | 'workflow' | 'virtual' | 'all';
+  AgentType?: 'agent' | 'virtual' | 'all';
 }
 
 dayjs.extend(utc);
 
 const PUBLISHED_STATUSES = [1, 2, 4];
+const WORKFLOW_VERSION = 3;
+const VIRTUAL_VERSION = 4;
+
+/** Tab -> bot version filter ('' = all agents). */
+const versionForTab = (tab?: AgentListProps['AgentType']): string =>
+  tab === 'agent' ? '1' : tab === 'virtual' ? String(VIRTUAL_VERSION) : '';
 
 const isPublishedBot = (botStatus?: number): boolean =>
   botStatus !== undefined && PUBLISHED_STATUSES.includes(botStatus);
@@ -104,16 +108,7 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
     searchValue: string;
   };
   const [msg, setMsg] = useState<MsgType>({
-    version:
-      AgentType === 'all'
-        ? ''
-        : AgentType === 'agent'
-          ? '1'
-          : AgentType === 'workflow'
-            ? '3'
-            : AgentType === 'virtual'
-              ? '4'
-              : '3',
+    version: versionForTab(AgentType),
     searchValue: '',
   });
   // tab状态赋值
@@ -131,16 +126,7 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
   useEffect(() => {
     setMsg(prev => ({
       ...prev,
-      version:
-        AgentType === 'all'
-          ? ''
-          : AgentType === 'agent'
-            ? '1'
-            : AgentType === 'workflow'
-              ? '3'
-              : AgentType === 'virtual'
-                ? '4'
-                : '3',
+      version: versionForTab(AgentType),
     }));
 
     setPageInfo(prev => ({
@@ -230,66 +216,35 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
     localStorage.setItem('selectedTab', statusToSave.toString());
   };
 
-  /** ## 前往详情页 */
-  const handleRowClick = (record: { botId?: string }): void => {
-    navigate(`/management/release/detail/${record?.botId}`, {
-      state: { record },
-    });
-    localBotTab();
-  };
-
-  /** ## 查看智能体 */
+  /**
+   * ## 查看 / 编辑智能体
+   * 按每个智能体自己的类型跳转，不按当前标签页：之前在「全部」标签下，指令型智能体会被当成工作流，
+   * 跳到 /work_flow/undefined/arrange。指令型进配置页；虚拟人基于编排画布，进它自己的画布。
+   */
   const checkAgent = (bot: {
     botId?: string;
     maasId?: string | number;
+    version?: number;
   }): void => {
-    if (AgentType === 'agent') {
-      navigate(`/space/config/overview?botId=${bot.botId}&flag=true`);
+    if (bot.version === VIRTUAL_VERSION && bot.maasId) {
+      navigate(`/work_flow/${bot.maasId}/overview?botId=${bot.botId}`);
     } else {
-      navigate(`/work_flow/${bot?.maasId}/overview`);
+      navigate(`/space/config/overview?botId=${bot.botId}&flag=true`);
     }
     localBotTab();
   };
 
-  /** ## 编辑智能体 */
   const updateAgent = (bot: {
     botId?: string;
     maasId?: string | number;
+    version?: number;
   }): void => {
-    if (AgentType === 'agent') {
-      navigate(`/space/config/base?botId=${bot?.botId}`);
-      // 记录选择状态
+    if (bot.version === VIRTUAL_VERSION && bot.maasId) {
+      navigate(`/work_flow/${bot.maasId}/arrange?botId=${bot.botId}`);
     } else {
-      navigate(`/work_flow/${bot?.maasId}/arrange`);
+      navigate(`/space/config/base?botId=${bot.botId}`);
     }
     localBotTab();
-  };
-
-  /** ## 显示调试未通过提示 */
-  const showDebugNotPassedWarning = (bot: any) => {
-    const warningMessage = message.error({
-      content: (
-        <span>
-          {t('releaseManagement.debugNotPassed')}
-          <span
-            style={{
-              color: '#1890ff',
-              cursor: 'pointer',
-              textDecoration: 'underline',
-            }}
-            onClick={() => {
-              // 关闭 Message
-              warningMessage();
-              // 跳转到调试页面
-              updateAgent(bot);
-            }}
-          >
-            {t('releaseManagement.goToDebug')}
-          </span>
-        </span>
-      ),
-      duration: 2.5,
-    });
   };
 
   // 创建统一的动态columns
@@ -448,66 +403,9 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
           {(pageInfo.botStatus === 0 || pageInfo.botStatus === -9) && (
             <span
               onClick={() => {
-                /* moreParams -- 能否发布为微信
-                botMultiFileParam -- 能否发布到星火
-                */
-                if (bot.version === 3) {
-                  // console.log(bot, 'bot---------');
-
-                  isCanPublish(bot?.maasId)
-                    .then(flag => {
-                      if (flag) {
-                        getPreparationData(bot.botId as unknown as number)
-                          .then((res: any) => {
-                            setBotMultiFileParam(res?.data?.botMultiFileParam);
-                            getBotBaseInfo(bot?.botId);
-                            setFabuFlag(true);
-                            setOpenWxmol(true);
-                          })
-                          .catch(err => {
-                            message.error(err?.msg);
-                          });
-
-                        /* NOTE: Publishing as mcp is currently not supported - 2025.10
-                      original logic -- getAgentInputParams & getChainInfo
-                      new api -- getPreparationData
-                    */
-                        getPreparationData(
-                          bot.botId as unknown as number,
-                          'MCP'
-                        ).then((res: any) => {
-                          if (
-                            res.length > 1 &&
-                            res
-                              .slice(1)
-                              .some(
-                                (item: { fileType: string }) =>
-                                  item.fileType !== 'file'
-                              )
-                          ) {
-                            setMoreParams(true);
-                          } else {
-                            setMoreParams(false);
-                          }
-                        });
-                      } else {
-                        showDebugNotPassedWarning(bot);
-                      }
-                    })
-                    .catch(err => {
-                      return (
-                        err?.msg &&
-                        message.error(
-                          err.msg ||
-                            t('releaseManagement.checkPublishStatusFailed')
-                        )
-                      );
-                    });
-                } else {
-                  getBotBaseInfo(bot?.botId);
-                  setFabuFlag(true);
-                  setOpenWxmol(true);
-                }
+                getBotBaseInfo(bot?.botId);
+                setFabuFlag(true);
+                setOpenWxmol(true);
               }}
             >
               {t('releaseManagement.release')}
@@ -518,13 +416,6 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
           <span onClick={() => updateAgent(bot)}>
             {t('releaseManagement.edit')}
           </span>
-
-          {/* 详情按钮 - 工作流类型显示 -- 改为分析 */}
-          {AgentType === 'workflow' && (
-            <span onClick={() => handleRowClick(bot)}>
-              {t('releaseManagement.detail')}
-            </span>
-          )}
 
           {/* 查看按钮 - 已发布状态显示 -- 都改为分析 */}
           {isPublishedBot(bot.botStatus) && (
@@ -575,8 +466,10 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
       searchValue: msg.searchValue,
       version:
         typeof msg.version === 'string'
-          ? parseInt(msg.version, 10)
+          ? parseInt(msg.version, 10) || undefined
           : msg.version,
+      // 「全部」只列智能体：工作流在「资源管理 - 工作流」中管理和发布。
+      excludeVersions: msg.version ? undefined : [WORKFLOW_VERSION],
     };
 
     if (
@@ -731,13 +624,11 @@ const AgentList: React.FC<AgentListProps> = ({ AgentType }) => {
           onCancel={() => {
             setOpenWxmol(false);
           }}
-          agentType={botInfo?.version === 3 ? 'workflow' : 'agent'}
-          isVirtual={AgentType === 'virtual' || botInfo?.version === 4}
-          agentMaasId={
-            AgentType === 'workflow' || botInfo?.version === 3
-              ? (botInfo?.maasId as string)
-              : null
+          agentType="agent"
+          isVirtual={
+            AgentType === 'virtual' || botInfo?.version === VIRTUAL_VERSION
           }
+          agentMaasId={null}
         />
         <Table
           className={botList?.length === 0 ? styles.noData : ''}

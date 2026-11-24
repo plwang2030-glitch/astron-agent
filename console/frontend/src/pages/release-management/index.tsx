@@ -1,18 +1,12 @@
 import React, { Suspense, ReactElement } from 'react';
 import { Spin } from 'antd';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import styles from './index.module.scss';
 
-// NOTE: 发布管理布局页及 指令型、工作流列表页
+// NOTE: 发布管理只管理智能体（指令型、虚拟人）；工作流在「资源管理 - 工作流」中管理和发布。
 const ReleasedPage = React.lazy(() => import('./released-page'));
 const AgentList = React.lazy(() => import('./agent-list'));
 const ApprovalList = React.lazy(() => import('./approval-list'));
-
-// NOTE: 工作流详情布局页及 详情页、日志页
-const DetailListPage = React.lazy(() => import('./detail-list-page'));
-const DetailOverview = React.lazy(() => import('./detail-overview'));
-const TracePage = React.lazy(() => import('./trace-logs'));
-
 export default function Index(): ReactElement {
   return (
     <div
@@ -31,16 +25,9 @@ export default function Index(): ReactElement {
             <Route index element={<AgentList AgentType="all" />} />
             <Route path="all" element={<AgentList AgentType="all" />} />
             <Route path="agent" element={<AgentList AgentType="agent" />} />
-            <Route
-              path="workflow"
-              element={<AgentList AgentType="workflow" />}
-            />
+            <Route path="workflow" element={<Navigate to="../all" replace />} />
             <Route path="virtual" element={<AgentList AgentType="virtual" />} />
             <Route path="approval" element={<ApprovalList />} />
-          </Route>
-          <Route path="/detail/:botId" element={<DetailListPage />}>
-            <Route index element={<DetailOverview />} />
-            <Route path="trace" element={<TracePage />} />
           </Route>
         </Routes>
       </Suspense>

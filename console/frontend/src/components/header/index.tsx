@@ -52,6 +52,15 @@ const tabs = [
     createButtonKey: 'create-rpa',
   },
   {
+    key: 'workflow',
+    path: '/resource/workflow',
+    iconClass: 'plugin-icon',
+    title: 'agentBuilder.resource.workflowTab',
+    searchPlaceholder: 'common.inputPlaceholder',
+    createButtonText: 'agentBuilder.resource.createWorkflow',
+    createButtonKey: 'create-workflow',
+  },
+  {
     key: 'skill',
     path: '/resource/skill',
     iconClass: 'plugin-icon',

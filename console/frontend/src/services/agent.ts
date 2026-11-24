@@ -10,6 +10,8 @@ export interface GetAgentListParams {
   sort: string;
   searchValue: string;
   version?: number;
+  /** Versions to leave out, e.g. [3] hides workflows (they live under 资源管理 - 工作流). */
+  excludeVersions?: number[];
 }
 
 export interface BotData {
@@ -139,8 +141,50 @@ export const getAgentList = async (
     botStatus: params.botStatus,
     sort: params.sort,
     version: params.version,
+    excludeVersions: params.excludeVersions,
   });
   return response as unknown as GetAgentListResponse;
+};
+
+export interface AgentCandidate {
+  botId: number;
+  name: string;
+  description: string;
+  avatar?: string;
+  modelName?: string;
+  updateTime?: string;
+  /** Only published agents can be referenced; they run their published version. */
+  published: boolean;
+  hasKnowledge: boolean;
+  skillCount: number;
+  toolCount: number;
+  mcpCount: number;
+  /** Agents this agent routes to itself. */
+  agentCount: number;
+  /** Names of agents that already use this agent as a sub-agent. */
+  usedBy: string[];
+  selectable: boolean;
+  reason?: string;
+}
+
+export interface AgentCandidateList {
+  /** Agents that already use the current agent; adding them back would form a cycle. */
+  usedBy: { botId: number; name: string }[];
+  /** Reference levels above the current agent (0 when nobody uses it). */
+  level: number;
+  /** Maximum reference levels, e.g. 2 allows A → B → C. */
+  maxDepth: number;
+  candidates: AgentCandidate[];
+}
+
+/** 可作为子智能体的候选列表（能力页「添加智能体」） */
+export const getAgentCandidates = async (
+  botId?: number
+): Promise<AgentCandidateList> => {
+  const response = await api.get(`/bot/agent-candidates`, {
+    params: botId ? { botId } : {},
+  });
+  return response as unknown as AgentCandidateList;
 };
 
 /** 复制bot */

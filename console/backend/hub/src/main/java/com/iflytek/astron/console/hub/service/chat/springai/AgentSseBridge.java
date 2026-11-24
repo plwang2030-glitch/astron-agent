@@ -23,6 +23,7 @@ public class AgentSseBridge {
     private final StringBuffer thinkingResult = new StringBuffer();
     private final StringBuffer traceResult = new StringBuffer();
     private boolean managedSearchTrace = false;
+    private volatile boolean detached;
 
     public AgentSseBridge(SseEmitter emitter, String streamId) {
         this.emitter = emitter;
@@ -71,7 +72,70 @@ public class AgentSseBridge {
         sendData(new JSONObject().fluentPut("choices", choices));
     }
 
+    /**
+     * Sends a tool that has started running, in the same {@code tool_calls} shape as
+     * {@link #emitToolTrace}, so clients show it right away. Not added to the saved trace; the final
+     * trace emitted at the end of the turn replaces it.
+     */
+    public void emitToolProgress(JSONObject entry) {
+        if (entry == null) {
+            return;
+        }
+        JSONArray toolCalls = new JSONArray();
+        toolCalls.add(entry);
+        JSONArray choices = new JSONArray();
+        choices.add(new JSONObject().fluentPut("delta", new JSONObject()));
+        choices.add(new JSONObject().fluentPut("delta", new JSONObject().fluentPut("tool_calls", toolCalls)));
+        sendData(new JSONObject().fluentPut("choices", choices));
+    }
+
+    /**
+     * Sends one expert-team progress event: {@code {"type":"team","team":{...}}}. Not persisted here.
+     */
+    public void emitTeamEvent(JSONObject event) {
+        if (event != null) {
+            sendData(new JSONObject().fluentPut("type", "team").fluentPut("team", event));
+        }
+    }
+
+    /**
+     * Background turn: tells the client the turn continues in the background, ends the SSE response,
+     * and from then on only accumulates output for persistence.
+     */
+    public void handOffToBackground(String notice, Long chatId, Long requestId) {
+        try {
+            sendData(new JSONObject().fluentPut("type", "background").fluentPut("message", notice));
+            // chatId / reqId let the client watch for the saved answer of this request.
+            emitter.send(SseEmitter.event()
+                    .name("end")
+                    .data(new JSONObject()
+                            .fluentPut("end", true)
+                            .fluentPut("background", true)
+                            .fluentPut("message", notice)
+                            .fluentPut("chatId", chatId)
+                            .fluentPut("reqId", requestId)
+                            .fluentPut("timestamp", System.currentTimeMillis())
+                            .toJSONString()));
+        } catch (IOException e) {
+            log.warn("SSE background notice failed, streamId: {}, error: {}", streamId, e.getMessage());
+        } finally {
+            detached = true;
+            try {
+                emitter.complete();
+            } catch (Exception e) {
+                log.warn("SSE emitter complete failed, streamId: {}, error: {}", streamId, e.getMessage());
+            }
+        }
+    }
+
+    public boolean isDetached() {
+        return detached;
+    }
+
     public void complete(Long chatId, Long requestId) {
+        if (detached) {
+            return;
+        }
         try {
             JSONObject completeData = new JSONObject()
                     .fluentPut("finalResult", finalResult.toString())
@@ -103,6 +167,9 @@ public class AgentSseBridge {
     }
 
     private void sendData(JSONObject payload) {
+        if (detached) {
+            return;
+        }
         try {
             emitter.send(SseEmitter.event().name("data").data(payload.toJSONString()));
         } catch (IOException e) {

@@ -132,6 +132,9 @@ public class UserBotServiceImpl implements UserBotService {
         if (myBotParamDTO.getVersion() != null) {
             param.put("version", myBotParamDTO.getVersion());
         }
+        if (CollectionUtils.isNotEmpty(myBotParamDTO.getExcludeVersions())) {
+            param.put("excludeVersions", myBotParamDTO.getExcludeVersions());
+        }
         if (StringUtils.isNotBlank(myBotParamDTO.getSearchValue())) {
             param.put("botName", myBotParamDTO.getSearchValue());
         }

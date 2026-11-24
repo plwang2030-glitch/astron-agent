@@ -6,7 +6,9 @@ import com.iflytek.astron.console.hub.service.chat.TraceToSourceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * @author mingsuiyongheng
@@ -23,14 +25,20 @@ public class TraceToSourceServiceImpl implements TraceToSourceService {
      */
     @Override
     public void respAddTrace(List<ChatRespModelDto> respList, List<ChatTraceSource> traceList) {
-        // Iterate through responses, supplement traceability data based on reqId
+        // Each answer gets the trace of its own request. Previously every answer received the last trace
+        // of the chat, so e.g. one turn's search sources or expert-team record showed on all answers.
+        Map<Long, ChatTraceSource> byReqId = new HashMap<>();
+        for (ChatTraceSource chatTraceSource : traceList) {
+            if (chatTraceSource != null && chatTraceSource.getReqId() != null) {
+                // Later rows win, matching the update-in-place on re-answer.
+                byReqId.put(chatTraceSource.getReqId(), chatTraceSource);
+            }
+        }
         for (ChatRespModelDto dto : respList) {
-            for (ChatTraceSource chatTraceSource : traceList) {
-                if (chatTraceSource == null) {
-                    continue;
-                }
-                dto.setTraceSource(chatTraceSource.getContent());
-                dto.setSourceType(chatTraceSource.getType());
+            ChatTraceSource trace = dto.getReqId() == null ? null : byReqId.get(dto.getReqId());
+            if (trace != null) {
+                dto.setTraceSource(trace.getContent());
+                dto.setSourceType(trace.getType());
             }
         }
     }

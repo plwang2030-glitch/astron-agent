@@ -98,6 +98,9 @@ class SpringAiAgentChatServiceSecurityTest {
         return new SpringAiAgentChatService(
                 chatModelFactory,
                 mock(AgentToolCallbackResolver.class),
+                mock(SubAgentToolFactory.class),
+                mock(ExportFileToolFactory.class),
+                mock(com.iflytek.astron.console.hub.service.notification.NotificationService.class),
                 mock(ChatRecordModelService.class),
                 mock(ChatDataService.class),
                 mock(AgentMemoryRuntimeService.class),

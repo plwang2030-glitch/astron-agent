@@ -62,6 +62,7 @@ import { useNodeCommon } from '@/components/workflow/hooks/use-node-common';
 import { isValidURL } from '@/components/workflow/utils/reactflowUtils';
 import { ToolItem } from '@/components/workflow/types';
 import { Icons } from '@/components/workflow/icons';
+import { knowledgeRepoType } from '@/components/workflow/modal/knowledge-selection';
 
 export const Agent = memo(({ data }: NodeDataProps) => {
   const { t } = useTranslation();
@@ -588,7 +589,7 @@ const useAgent = ({
               match: {
                 repoIds: [tool?.toolId],
               },
-              repoType: tool?.tag === 'CBG-RAG' ? 2 : 3,
+              repoType: knowledgeRepoType(tool?.tag),
             });
           } else {
             plugin.knowledge = [
@@ -599,7 +600,7 @@ const useAgent = ({
                 match: {
                   repoIds: [tool?.toolId],
                 },
-                repoType: tool?.tag === 'CBG-RAG' ? 2 : 3,
+                repoType: knowledgeRepoType(tool?.tag),
               },
             ];
           }

@@ -8,7 +8,7 @@ import base64
 import io
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import fitz  # type: ignore
 from common.otlp.log_trace.node_trace_log import NodeTraceLog
@@ -21,11 +21,19 @@ from plugin.aitools.api.schemas.types import BaseResponse, SuccessResponse
 from plugin.aitools.common.clients.adapters import SpanLike
 from plugin.aitools.common.clients.aiohttp_client import HttpClient
 from plugin.aitools.common.clients.safe_download import fetch_public_resource
+from plugin.aitools.common.clients.volcengine_client import ark_vision_chat
 from plugin.aitools.common.clients.websockets_client import WebSocketClient
 from plugin.aitools.common.exceptions.error.code_enums import CodeEnums
 from plugin.aitools.common.exceptions.exceptions import ServiceException
 from plugin.aitools.const.const import OCR_LLM_HTTP_URL_KEY
-from plugin.aitools.platform_account_config import get_iflytek_open_platform_credentials
+from plugin.aitools.platform_account_config import (
+    CAPABILITY_OCR,
+    IflytekOpenPlatformCredentials,
+    VolcengineArkConfig,
+    get_iflytek_open_platform_credentials,
+    get_volcengine_ark_config,
+    uses_volcengine,
+)
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -409,6 +417,70 @@ class OcrLLMTask:
                 )
 
 
+VOLC_OCR_PROMPT = (
+    "请识别图片中的全部文字内容，按原有阅读顺序和版式输出为 Markdown："
+    "标题使用 #，列表使用 -，表格使用 Markdown 表格，代码使用代码块。"
+    "只输出识别结果，不要添加任何解释、总结或额外内容；图片中没有文字时输出空字符串。"
+)
+
+
+class VolcOcrTask:
+    """OCR one image page with the Volcengine Ark vision model.
+
+    Returns the same dict shape as OcrLLMTask.invoke so merge_results is unchanged.
+    """
+
+    def __init__(
+        self,
+        config: VolcengineArkConfig,
+        data: bytes,
+        span: Optional[SpanLike] = None,
+        file_index: int = 0,
+        page_index: int = 0,
+    ) -> None:
+        self.config = config
+        self.data = data
+        self.parent_span = span
+        self.file_index = file_index
+        self.page_index = page_index
+
+    async def invoke(self) -> Dict[str, Any]:
+        try:
+            text = await ark_vision_chat(
+                self.config,
+                VOLC_OCR_PROMPT,
+                self.data,
+                self.parent_span,
+                disable_thinking=True,
+            )
+            return {
+                "file_index": self.file_index,
+                "page_index": self.page_index,
+                "name": "markdown",
+                "values": text.strip(),
+                "source_datas": [],
+            }
+        except ServiceException as e:
+            log.error(
+                f"Volcengine OCR failed, file={self.file_index}, "
+                f"page={self.page_index}: {e.message}"
+            )
+            message = e.message
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            log.error(
+                f"Volcengine OCR failed, file={self.file_index}, "
+                f"page={self.page_index}: {e}"
+            )
+            message = str(e)
+        return {
+            "file_index": self.file_index,
+            "page_index": self.page_index,
+            "name": "str",
+            "values": f"OCR 服务调用失败: {message}",
+            "source_datas": [],
+        }
+
+
 def pdf_convert_png(
     pdf_content: bytes,
     page_start: int = DOCUMENT_PAGE_UNLIMITED,
@@ -528,11 +600,38 @@ async def req_ase_ability_ocr_service(
         OCR_LLM_HTTP_URL_KEY,
         "https://cbm01.cn-huabei-1.xf-yun.com/v1/private/se75ocrbm",
     )
-    credentials = get_iflytek_open_platform_credentials()
+    volc_config: Optional[VolcengineArkConfig] = None
+    credentials: Optional[IflytekOpenPlatformCredentials] = None
+    if uses_volcengine(CAPABILITY_OCR):
+        volc_config = get_volcengine_ark_config()
+        log.info(f"OCR routed to volcengine, model={volc_config.vision_model}")
+    else:
+        credentials = get_iflytek_open_platform_credentials()
+
+    def build_task(
+        data: bytes, file_index: int = 0, page_index: int = 0
+    ) -> Union[OcrLLMTask, VolcOcrTask]:
+        if volc_config is not None:
+            return VolcOcrTask(
+                config=volc_config,
+                data=data,
+                file_index=file_index,
+                page_index=page_index,
+            )
+        assert credentials is not None
+        return OcrLLMTask(
+            url=url,
+            app_id=credentials.app_id,
+            api_key=credentials.api_key,
+            api_secret=credentials.api_secret,
+            data=data,
+            file_index=file_index,
+            page_index=page_index,
+        )
 
     pngs_list = []
     texts_list = []
-    ocr_tasks_list = []
+    ocr_tasks_list: List[Union[OcrLLMTask, VolcOcrTask]] = []
 
     for i, data_byte in enumerate(image_byte_arrays):
         pngs: Dict[int, bytes] = {}
@@ -544,37 +643,18 @@ async def req_ase_ability_ocr_service(
             )
             # pngs, texts = pdf_convert_png(data_byte, body.page_start, body.page_end)
             for j in pngs.keys():
-                ocr_tasks_list.append(
-                    OcrLLMTask(
-                        url=url,
-                        app_id=credentials.app_id,
-                        api_key=credentials.api_key,
-                        api_secret=credentials.api_secret,
-                        data=pngs[j],
-                        # span=span,
-                        file_index=i,
-                        page_index=j,
-                    )
-                )
+                ocr_tasks_list.append(build_task(pngs[j], file_index=i, page_index=j))
         else:
             pngs[0] = data_byte
-            ocr_tasks_list.append(
-                OcrLLMTask(
-                    url=url,
-                    app_id=credentials.app_id,
-                    api_key=credentials.api_key,
-                    api_secret=credentials.api_secret,
-                    data=pngs[0],
-                    # span=span,
-                )
-            )
+            ocr_tasks_list.append(build_task(pngs[0]))
 
         pngs_list.append(pngs)
         texts_list.append(texts)
 
-    sem = asyncio.Semaphore(50)
+    # Ark vision calls are heavier than the iFLYTEK OCR API; keep concurrency modest.
+    sem = asyncio.Semaphore(5 if volc_config is not None else 50)
 
-    async def safe_invoke(task: OcrLLMTask) -> Dict[str, Any]:
+    async def safe_invoke(task: Union[OcrLLMTask, VolcOcrTask]) -> Dict[str, Any]:
         async with sem:
             return await task.invoke()
 

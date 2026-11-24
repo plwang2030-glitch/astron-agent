@@ -139,6 +139,13 @@ export const createMenuList = (): {
         path: '/management/app',
       },
       {
+        icon: modelManagement,
+        iconAct: modelManagementAct,
+        subTitle: getTranslation('sidebar.aShareTrading'),
+        activeTab: 'a-share',
+        path: '/management/a-share',
+      },
+      {
         icon: resourceManagement,
         iconAct: resourceManagementAct,
         subTitle: getTranslation('sidebar.platformAccountManagement'),

@@ -30,6 +30,10 @@
         <if test="version != null">
             and a.version = #{version}
         </if>
+        <if test="excludeVersions != null and excludeVersions.size() > 0">
+            and a.version not in
+            <foreach collection="excludeVersions" item="excludeVersion" open="(" separator="," close=")">#{excludeVersion}</foreach>
+        </if>
         <if test="botName != null">
             and a.bot_name like CONCAT('%', #{botName}, '%')
         </if>
@@ -68,6 +72,10 @@
         </if>
         <if test="version != null">
             and a.version = #{version}
+        </if>
+        <if test="excludeVersions != null and excludeVersions.size() > 0">
+            and a.version not in
+            <foreach collection="excludeVersions" item="excludeVersion" open="(" separator="," close=")">#{excludeVersion}</foreach>
         </if>
         <if test="botName != null">
             and a.bot_name like CONCAT('%', #{botName}, '%')

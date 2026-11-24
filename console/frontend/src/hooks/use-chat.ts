@@ -1,4 +1,5 @@
 import useChatStore from '@/store/chat-store';
+import type { TeamEvent } from '@/types/team';
 import { getLanguageCode } from '@/utils/http';
 import { useRef } from 'react';
 import type { Option } from '@/types/chat';
@@ -6,6 +7,8 @@ import { useNavigate } from 'react-router-dom';
 import { baseURL } from '@/utils/http';
 import useSpaceStore from '@/store/space-store';
 import { fetchSseWithContext } from '@/utils/sse-request';
+import { getChatHistory } from '@/services/chat';
+import { formatHistoryToMessages } from '@/utils';
 
 // SSE 数据类型定义
 interface SSEData {
@@ -34,7 +37,48 @@ interface SSEData {
   message?: string;
   finalResult?: string;
   reqId?: number;
+  team?: TeamEvent;
+  /** 结束事件：本轮已转为后台运行 */
+  background?: boolean;
+  chatId?: number;
 }
+
+/** 后台任务最长 30 分钟，多等 1 分钟 */
+const BACKGROUND_WATCH_MS = 31 * 60 * 1000;
+const BACKGROUND_POLL_MS = 5000;
+
+/**
+ * 后台运行：轮询对话历史，等这条提问的回答保存后刷新消息列表，替换「已转为后台运行」占位。
+ * 用户换了对话、或正在接收新的回复时不覆盖列表。
+ */
+const watchBackgroundAnswer = (chatId: number, reqId: number): void => {
+  const deadline = Date.now() + BACKGROUND_WATCH_MS;
+  const tick = async (): Promise<void> => {
+    const state = useChatStore.getState();
+    if (Date.now() > deadline || state.currentChatId !== chatId) {
+      return;
+    }
+    try {
+      const messages = formatHistoryToMessages(await getChatHistory(chatId));
+      const done = messages.some(
+        m =>
+          m.reqType === 'BOT' &&
+          Number(m.reqId) === Number(reqId) &&
+          !!m.message
+      );
+      if (done && !useChatStore.getState().streamId) {
+        if (useChatStore.getState().currentChatId === chatId) {
+          useChatStore.getState().setMessageList(messages);
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn('background answer poll failed', err);
+    }
+    setTimeout(tick, BACKGROUND_POLL_MS);
+  };
+  setTimeout(tick, BACKGROUND_POLL_MS);
+};
 
 interface SSEEvent {
   data: string;
@@ -69,6 +113,7 @@ const useChat = () => {
   const setCurrentToolName = useChatStore(state => state.setCurrentToolName); //当前调用工具名称
   const setTraceSource = useChatStore(state => state.setTraceSource); //溯源结果
   const setDeepThinkText = useChatStore(state => state.setDeepThinkText); //深度思考
+  const applyTeamEvent = useChatStore(state => state.applyTeamEvent); //专家团进度
   const setIsLoading = useChatStore(state => state.setIsLoading); //是否正在加载
   const setWorkflowOperation = useChatStore(
     state => state.setWorkflowOperation
@@ -177,6 +222,18 @@ const useChat = () => {
           return;
         }
         setIsLoading(false);
+        // 专家团：各专家的开始、实时输出和结果
+        if (type === 'team' && deCodedData.team) {
+          applyTeamEvent(deCodedData.team);
+          updateStreamingMessage(ans);
+          return;
+        }
+        // 已转为后台运行：结果稍后保存在对话中，并通过通知中心提醒
+        if (type === 'background') {
+          ans = message || '已转为后台运行，完成后会在通知中心提醒你。';
+          updateStreamingMessage(ans);
+          return;
+        }
         //工具  模型返回溯源结果
         if (
           choices?.[1]?.delta?.tool_calls &&
@@ -232,6 +289,13 @@ const useChat = () => {
             // 完成流式消息，添加sid和id
             finishStreamingMessage(sidRef.current, reqIdRef.current);
             controller.abort('结束');
+            // 后台运行：回答完成后会保存到对话里，到时自动显示
+            if (deCodedData.background && reqId) {
+              watchBackgroundAnswer(
+                Number(deCodedData.chatId) || currentChatId,
+                Number(reqId)
+              );
+            }
             return;
           }
           // 更新流式消息内容
@@ -263,6 +327,8 @@ const useChat = () => {
     workflowOperation?: string;
     version?: string;
     onSendCallback?: () => void;
+    /** 后台运行：立即返回，结果保存在对话中，完成后通知 */
+    background?: boolean;
   }) => {
     setIsWorkflowOption(false);
     setWorkflowOption({ option: [], content: '' });
@@ -274,6 +340,7 @@ const useChat = () => {
     form.append('chatId', `${currentChatId}`);
     form.append('workflowVersion', version || '');
     workflowOperation && form.append('workflowOperation', workflowOperation);
+    params.background && form.append('background', 'true');
     // 执行回调函数
     onSendCallback && onSendCallback();
     fetchSSE(esURL, form);

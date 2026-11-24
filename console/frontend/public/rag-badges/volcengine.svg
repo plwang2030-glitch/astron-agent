@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="78" height="28" viewBox="0 0 78 28">
+  <rect x="0.5" y="0.5" width="77" height="27" rx="6" fill="#EEF4FF" stroke="#C9D8FF"/>
+  <path d="M10 18.5 15 9l3 5.2 2-3.4 4 7.7z" fill="#1664FF"/>
+  <text x="29" y="18.5" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" font-weight="600" fill="#1664FF">火山引擎</text>
+</svg>

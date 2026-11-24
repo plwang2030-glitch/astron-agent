@@ -9,6 +9,7 @@ import openPlatformEnModule from './openPlatformEnModule';
 import rpa from './rpa';
 import mcp from './mcp';
 import automation from './automation';
+import agentBuilder from './agentBuilder';
 
 export default {
   ...openPlatformEnModule,
@@ -22,4 +23,5 @@ export default {
   rpa,
   mcp,
   automation,
+  agentBuilder,
 };

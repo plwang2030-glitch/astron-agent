@@ -19,8 +19,6 @@ export default function Index() {
     location.pathname === '/management/release/all/' ||
     location.pathname === '/management/release/agent' ||
     location.pathname === '/management/release/agent/' ||
-    location.pathname === '/management/release/workflow' ||
-    location.pathname === '/management/release/workflow/' ||
     location.pathname === '/management/release/virtual' ||
     location.pathname === '/management/release/virtual/';
 
@@ -81,18 +79,6 @@ export default function Index() {
                   }}
                 >
                   {t('releaseManagement.instructional')}
-                </div>
-                <div
-                  className={`${styles.changeBox} ${
-                    (location.pathname === '/management/release/workflow' ||
-                      location.pathname === '/management/release/workflow/') &&
-                    styles.activeBox
-                  }`}
-                  onClick={(): void => {
-                    navigate('/management/release/workflow');
-                  }}
-                >
-                  {t('releaseManagement.workflow')}
                 </div>
                 <div
                   className={`${styles.changeBox} ${

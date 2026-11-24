@@ -12,6 +12,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ChatBotReqDto {
 
+    /** Run the turn in the background and notify the user when it ends (agent chat only). */
+    private Boolean background;
+
     /**
      * Question text
      */

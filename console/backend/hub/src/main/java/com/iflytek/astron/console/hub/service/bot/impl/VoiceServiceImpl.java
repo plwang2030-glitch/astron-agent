@@ -12,8 +12,10 @@ import com.iflytek.astron.console.toolkit.tool.http.HttpAuthTool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,4 +62,57 @@ public class VoiceServiceImpl implements VoiceService {
         }
         return configList;
     }
+
+    @Override
+    public List<PronunciationPersonConfig> getVolcenginePronunciationPerson(String ttsResourceId,
+            String defaultSpeaker) {
+        String[][] voices = StringUtils.startsWith(ttsResourceId, "seed-tts-2") ? VOLC_TTS2_VOICES : VOLC_TTS1_VOICES;
+        List<PronunciationPersonConfig> list = new ArrayList<>(voices.length + 1);
+        boolean defaultListed = false;
+        for (String[] voice : voices) {
+            defaultListed |= voice[1].equals(defaultSpeaker);
+        }
+        if (StringUtils.isNotBlank(defaultSpeaker) && !defaultListed) {
+            list.add(volcVoice(list.size(), "默认发音人", defaultSpeaker));
+        }
+        for (String[] voice : voices) {
+            list.add(volcVoice(list.size(), voice[0], voice[1]));
+        }
+        return list;
+    }
+
+    private static PronunciationPersonConfig volcVoice(int index, String name, String voiceType) {
+        PronunciationPersonConfig item = new PronunciationPersonConfig();
+        item.setId((long) -(index + 1));
+        item.setName(name);
+        item.setVoiceType(voiceType);
+        item.setCoverUrl(VOLC_VOICE_COVER);
+        item.setSort(index);
+        item.setSpeakerType(PronunciationPersonConfig.SpeakerTypeEnum.NORMAL);
+        item.setExquisite(0);
+        item.setDeleted(0);
+        return item;
+    }
+
+    private static final String VOLC_VOICE_COVER = "/skylumin-avatar.svg";
+
+    /**
+     * Doubao Speech 1.0 voices (X-Api-Resource-Id seed-tts-1.0). Other 1.0 voices can be set as
+     * default.
+     */
+    private static final String[][] VOLC_TTS1_VOICES = {
+            {"爽快思思", "zh_female_shuangkuaisisi_moon_bigtts"},
+    };
+
+    /** Doubao Speech 2.0 voices (X-Api-Resource-Id seed-tts-2.0), from the official voice list. */
+    private static final String[][] VOLC_TTS2_VOICES = {
+            {"Vivi 2.0", "zh_female_vv_uranus_bigtts"},
+            {"小何 2.0", "zh_female_xiaohe_uranus_bigtts"},
+            {"云舟 2.0", "zh_male_m191_uranus_bigtts"},
+            {"小天 2.0", "zh_male_taocheng_uranus_bigtts"},
+            {"爽快思思 2.0", "zh_female_shuangkuaisisi_uranus_bigtts"},
+            {"温暖阿虎 2.0", "zh_male_wennuanahu_uranus_bigtts"},
+            {"知性灿灿 2.0", "zh_female_cancan_uranus_bigtts"},
+            {"儒雅逸辰 2.0", "zh_male_ruyayichen_uranus_bigtts"},
+    };
 }

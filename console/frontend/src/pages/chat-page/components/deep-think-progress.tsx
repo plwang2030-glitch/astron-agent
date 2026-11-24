@@ -7,14 +7,22 @@ import MarkdownRender from '@/components/markdown-render';
 
 const DeepThinkProgress: React.FC<{
   answerItem?: MessageListType;
-}> = ({ answerItem }) => {
+  /**
+   * 该回答是否仍在生成。由父组件按流式状态传入；不传时沿用旧逻辑（有正文或 sid 即视为思考完成）。
+   * 停止输出或出错时回答可能只有思考内容、没有正文和 sid，必须靠这个状态结束动画。
+   */
+  streaming?: boolean;
+}> = ({ answerItem, streaming }) => {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
 
   if (!answerItem?.reasoning) {
     return null;
   }
-  const thinkComplete = Boolean(answerItem.message || answerItem.sid);
+  const hasAnswer = Boolean(answerItem.message || answerItem.sid);
+  const thinkComplete = hasAnswer || streaming === false;
+  // 思考阶段被中断：没有产出正文
+  const interrupted = streaming === false && !answerItem.message;
   const renderThinkText = () => {
     return (
       <div className="flex relative">
@@ -80,7 +88,9 @@ const DeepThinkProgress: React.FC<{
             alt=""
             className="mr-2.5"
           />
-          {t('chatPage.deepThinkProgress.endTip')}
+          {interrupted
+            ? t('chatPage.deepThinkProgress.stoppedTip')
+            : t('chatPage.deepThinkProgress.endTip')}
         </div>
       ) : null}
     </div>

@@ -67,6 +67,12 @@ public enum ResponseEnum {
     CREATE_BOT_FAILED(60023, "error.create.bot.failed"),
     UPDATE_BOT_FAILED(60024, "error.update.bot.failed"),
     BOT_BELONG_ERROR(60025, "error.bot.belong.error"),
+    // Sub-agents must not form a cycle (A adds B, then B adds A, directly or indirectly)
+    BOT_AGENT_CYCLE(60090, "error.bot.agent.cycle"),
+    BOT_AGENT_DEPTH(60091, "error.bot.agent.depth"),
+    BOT_AGENT_NOT_PUBLISHED(60092, "error.bot.agent.not.published"),
+    BOT_AGENT_NOT_AVAILABLE(60093, "error.bot.agent.not.available"),
+    BOT_AGENT_BUSY(60094, "error.bot.agent.busy"),
     BOT_STATUS_INVALID(60026, "error.bot.status.invalid"),
     SHARE_URL_INVALID(60027, "error.share.url.invalid"),
     FILE_NOT_PROCESS(60028, "error.file.not.process"),
@@ -164,6 +170,7 @@ public enum ResponseEnum {
     ENTERPRISE_TEAM_UPDATE_ROLE_FAILED(63006, "enterprise.user.update.role.failed"),
     ENTERPRISE_TEAM_SUPER_ADMIN_CANNOT_LEAVE_TEAM(63008, "enterprise.user.super.admin.cannot.leave.team"),
     ENTERPRISE_TEAM_LEAVE_FAILED(63009, "enterprise.user.leave.failed"),
+    ENTERPRISE_TEAM_SUPER_ADMIN_ROLE_CANNOT_BE_CHANGED(63010, "enterprise.user.super.admin.role.cannot.be.changed"),
 
     // Invitation management related errors
     INVITE_SPACE_USER_FULL(64001, "invite.space.user.full"),
@@ -401,6 +408,8 @@ public enum ResponseEnum {
     REPO_DELETE_FAILED_BOT_USED(8738, "repo.delete.failed.bot.used"),
     REPO_FILE_UPLOAD_TYPE_NOT_EXIST(8739, "repo.file.upload.type.not.exist"),
     REPO_CREATE_RAGFLOW_FAILED(8740, "repo.create.ragflow.failed"),
+    REPO_VOLCENGINE_BIND_FAILED(8741, "repo.volcengine.bind.failed"),
+    REPO_VOLCENGINE_OPERATION_NOT_SUPPORTED(8742, "repo.volcengine.operation.not.supported"),
 
     // 8900 - 9000 (Model related)
     MODEL_NOT_COMPATIBLE_OPENAI(8900, "model.not.compatible.openai"),

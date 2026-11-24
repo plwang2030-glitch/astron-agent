@@ -70,6 +70,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class RepoService extends ServiceImpl<RepoMapper, Repo> {
     private static final int RAGFLOW_DATASET_NAME_MAX_LENGTH = 255;
+    /** {@code kb-xxx}, {@code collection_name} or {@code project/collection_name}. */
+    private static final java.util.regex.Pattern VOLCENGINE_REPO_ID_PATTERN = java.util.regex.Pattern.compile(
+            "^(kb-[A-Za-z0-9-]{1,128}|([A-Za-z0-9_.-]{1,64}/)?[A-Za-z][A-Za-z0-9_]{0,63})$");
 
     /**
      * Get single record by query wrapper
@@ -102,6 +105,8 @@ public class RepoService extends ServiceImpl<RepoMapper, Repo> {
     RepoAuthorizedConfig repoAuthorizedConfig;
     @Resource
     KnowledgeV2ServiceCallHandler knowledgeV2ServiceCallHandler;
+    @Resource
+    com.iflytek.astron.console.toolkit.service.platform.PlatformAccountService platformAccountService;
     @Resource
     BotRepoSubscriptService botRepoSubscriptService;
     @Resource
@@ -148,6 +153,19 @@ public class RepoService extends ServiceImpl<RepoMapper, Repo> {
         validateRepoNameUnique(repoVO, spaceId);
         validateTag(repoVO.getTag());
 
+        if (ProjectContent.isVolcengineRag(repoVO.getTag())) {
+            // The knowledge base comes from 平台账号管理 - 火山引擎（字节）; an explicit outerRepoId (API
+            // callers) overrides it. The id is stored on the repo, so later config changes do not
+            // re-point existing repos.
+            String configured = StringUtils.isNotBlank(repoVO.getOuterRepoId())
+                    ? repoVO.getOuterRepoId()
+                    : platformAccountService.requireVolcengineKnowledgeCollection();
+            String identifier = normalizeVolcengineRepoId(configured);
+            verifyVolcengineRepo(identifier);
+            log.info("Binding Volcengine knowledge base, name = {}, kb = {}", repoVO.getName(), identifier);
+            return self.persistRepo(repoVO, spaceId, identifier, null);
+        }
+
         String coreRepoId = resolveCoreRepoId(repoVO);
         String ragflowDatasetId = null;
         if (ProjectContent.FILE_SOURCE_RAG_FLOW_RAG_STR.equals(repoVO.getTag())) {
@@ -173,9 +191,62 @@ public class RepoService extends ServiceImpl<RepoMapper, Repo> {
 
     /** Reject unsupported RAG tags. */
     private void validateTag(String tag) {
-        if (!ProjectContent.isCbgRagCompatible(tag) && !ProjectContent.isAiuiRagCompatible(tag)) {
+        if (!ProjectContent.isCbgRagCompatible(tag) && !ProjectContent.isAiuiRagCompatible(tag)
+                && !ProjectContent.isVolcengineRag(tag)) {
             throw new BusinessException(ResponseEnum.REPO_TYPE_NOT_MATCH);
         }
+    }
+
+    /**
+     * Volcengine knowledge base identifier: {@code kb-xxx} (resource id), {@code collection_name}
+     * (default project) or {@code project/collection_name}. Stored as the repo's core id.
+     */
+    static String normalizeVolcengineRepoId(String raw) {
+        String value = StringUtils.trimToEmpty(raw);
+        int slash = value.indexOf('/');
+        if (slash > 0) {
+            value = value.substring(0, slash).trim() + "/" + value.substring(slash + 1).trim();
+        }
+        if (!VOLCENGINE_REPO_ID_PATTERN.matcher(value).matches()) {
+            throw new BusinessException(ResponseEnum.REPO_VOLCENGINE_BIND_FAILED,
+                    "火山知识库名称或 ID 格式不正确，请在「平台账号管理 - 火山引擎（字节）」填写名称（如 lumin_viking）、项目/名称，或以 kb- 开头的知识库 ID");
+        }
+        return value;
+    }
+
+    /** Confirm the knowledge base exists and the configured API Key can read it. */
+    private void verifyVolcengineRepo(String identifier) {
+        KnowledgeResponse resp = knowledgeV2ServiceCallHandler.listProviderDocs(
+                ProjectContent.FILE_SOURCE_VOLCENGINE_RAG_STR, identifier, 0, 1);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 0) {
+            String msg = resp == null ? "empty response" : resp.getMessage();
+            log.warn("Volcengine knowledge base check failed, kb = {}, message = {}", identifier, msg);
+            throw new BusinessException(ResponseEnum.REPO_VOLCENGINE_BIND_FAILED, StringUtils.defaultString(msg));
+        }
+    }
+
+    /**
+     * Documents of a bound Volcengine knowledge base (read-only, managed in the Volcengine console).
+     */
+    public Object listProviderDocs(Long id, Integer offset, Integer limit) {
+        Repo repo = this.getById(id);
+        if (repo == null) {
+            throw new BusinessException(ResponseEnum.REPO_NOT_EXIST);
+        }
+        dataPermissionCheckTool.checkRepoBelong(repo);
+        if (!ProjectContent.isVolcengineRag(repo.getTag())) {
+            throw new BusinessException(ResponseEnum.REPO_TYPE_NOT_MATCH);
+        }
+        int safeOffset = offset == null ? 0 : Math.max(0, offset);
+        int safeLimit = limit == null ? 20 : Math.max(1, Math.min(limit, 100));
+        KnowledgeResponse resp = knowledgeV2ServiceCallHandler.listProviderDocs(
+                repo.getTag(), repo.getCoreRepoId(), safeOffset, safeLimit);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 0) {
+            String msg = resp == null ? "empty response" : resp.getMessage();
+            log.warn("Volcengine list docs failed, repoId = {}, message = {}", id, msg);
+            throw new BusinessException(ResponseEnum.REPO_VOLCENGINE_BIND_FAILED, StringUtils.defaultString(msg));
+        }
+        return resp.getData();
     }
 
     /** Ragflow-RAG always uses a server-generated core repo id. */
@@ -762,6 +833,9 @@ public class RepoService extends ServiceImpl<RepoMapper, Repo> {
         if (isBelongLoginUser) {
             dataPermissionCheckTool.checkRepoBelong(repo);
         }
+        if (ProjectContent.isVolcengineRag(repo.getTag())) {
+            return volcengineHitTest(repo, query, topN);
+        }
 
         List<FileDirectoryTree> fileDirectoryTrees = directoryTreeService.list(Wrappers.lambdaQuery(FileDirectoryTree.class).eq(FileDirectoryTree::getAppId, repo.getId()).eq(FileDirectoryTree::getIsFile, 1));
         if (CollectionUtils.isEmpty(fileDirectoryTrees)) {
@@ -840,6 +914,107 @@ public class RepoService extends ServiceImpl<RepoMapper, Repo> {
         return results;
     }
 
+
+    /**
+     * Retrieval without request context, for sub-agent tool calls that run on the model's tool thread.
+     * Callers must have authorized the repo already (it is attached to an agent the user may use). No
+     * hit-test history is recorded. Returns chunk contents; failures yield an empty list.
+     */
+    public List<String> retrieveChunkContentsForRuntime(Long repoId, String query, Integer topN) {
+        Repo repo = repoId == null ? null : this.getById(repoId);
+        if (repo == null || Boolean.TRUE.equals(repo.getDeleted())) {
+            return Collections.emptyList();
+        }
+        QueryRequest request;
+        if (ProjectContent.isVolcengineRag(repo.getTag())) {
+            request = new QueryRequest();
+            request.setQuery(query);
+            request.setTopN(topN);
+            request.setRagType(repo.getTag());
+            QueryMatchObj matchObj = new QueryMatchObj();
+            matchObj.setRepoId(Collections.singletonList(repo.getCoreRepoId()));
+            request.setMatch(matchObj);
+        } else {
+            request = this.getKnowledgeQueryObject(repo, topN, query);
+            if (StringUtils.isBlank(request.getRagType())) {
+                // No processed files yet
+                return Collections.emptyList();
+            }
+        }
+        try {
+            KnowledgeResponse resp = knowledgeV2ServiceCallHandler.knowledgeQuery(request);
+            if (resp == null || resp.getCode() == null || resp.getCode() != 0 || resp.getData() == null) {
+                log.warn("Runtime knowledge retrieval failed, repoId = {}, message = {}", repoId,
+                        resp == null ? null : resp.getMessage());
+                return Collections.emptyList();
+            }
+            JSONObject data = JSON.parseObject(String.valueOf(resp.getData()));
+            JSONArray items = data == null ? null : data.getJSONArray("results");
+            List<String> contents = new ArrayList<>();
+            if (items != null) {
+                for (int i = 0; i < items.size(); i++) {
+                    String content = items.getJSONObject(i).getString("content");
+                    if (StringUtils.isNotBlank(content)) {
+                        contents.add(content);
+                    }
+                }
+            }
+            return contents;
+        } catch (Exception e) {
+            log.warn("Runtime knowledge retrieval error, repoId = {}, errorType = {}", repoId,
+                    e.getClass().getSimpleName());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Retrieval for a bound Volcengine knowledge base. There are no local files: results carry the
+     * Volcengine document name as a lightweight {@code fileInfo} for display.
+     */
+    private List<ChunkInfo> volcengineHitTest(Repo repo, String query, Integer topN) {
+        QueryRequest request = new QueryRequest();
+        request.setQuery(query);
+        request.setTopN(topN);
+        request.setRagType(repo.getTag());
+        QueryMatchObj matchObj = new QueryMatchObj();
+        matchObj.setRepoId(Collections.singletonList(repo.getCoreRepoId()));
+        request.setMatch(matchObj);
+
+        KnowledgeResponse resp = knowledgeV2ServiceCallHandler.knowledgeQuery(request);
+        if (resp == null || resp.getCode() == null || resp.getCode() != 0) {
+            log.error("Volcengine knowledge retrieval failed, repoId = {}, message = {}", repo.getId(),
+                    resp == null ? null : resp.getMessage());
+            throw new BusinessException(ResponseEnum.REPO_KNOWLEDGE_QUERY_FAILED);
+        }
+
+        HitTestHistory hitTestHistory = new HitTestHistory();
+        hitTestHistory.setRepoId(repo.getId());
+        hitTestHistory.setUserId(UserInfoManagerHandler.getUserId());
+        hitTestHistory.setQuery(query);
+        hitTestHistory.setCreateTime(new Timestamp(System.currentTimeMillis()));
+        historyService.save(hitTestHistory);
+
+        JSONObject data = JSON.parseObject(String.valueOf(resp.getData()));
+        JSONArray items = data == null ? null : data.getJSONArray("results");
+        List<ChunkInfo> results = new ArrayList<>();
+        if (items == null) {
+            return results;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            JSONObject item = items.getJSONObject(i);
+            ChunkInfo info = item.toJavaObject(ChunkInfo.class);
+            String fileName = item.getString("fileName");
+            JSONObject fileInfo = new JSONObject();
+            fileInfo.put("name", StringUtils.defaultIfBlank(fileName, info.getTitle()));
+            fileInfo.put("type", StringUtils.substringAfterLast(StringUtils.defaultString(fileName), "."));
+            fileInfo.put("uuid", info.getDocId());
+            fileInfo.put("charCount", StringUtils.length(info.getContent()));
+            info.setFileInfo(fileInfo);
+            results.add(info);
+        }
+        log.info("Volcengine hit test done, repoId = {}, topN = {}, results = {}", repo.getId(), topN, results.size());
+        return results;
+    }
 
     /**
      * Get paginated hit test history for a repository. Returns history of knowledge retrieval tests

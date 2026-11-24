@@ -112,7 +112,9 @@ def test_database_loader_reads_console_config_and_backfills_redis() -> None:
         platform_account_config.PLATFORM_ACCOUNT_CATEGORY,
         platform_account_config.KNOWLEDGE_PLATFORM_CODE,
     )
-    cache_store.assert_called_once_with(raw_config)
+    cache_store.assert_called_once_with(
+        raw_config, platform_account_config.KNOWLEDGE_PLATFORM_CACHE_KEY
+    )
     connection.close.assert_called_once_with()
 
 

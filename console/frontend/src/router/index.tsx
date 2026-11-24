@@ -33,6 +33,7 @@ const ReleaseManagement = lazy(() => import('@/pages/release-management'));
 const BotApi = lazy(() => import('@/pages/bot-api/api'));
 const SharePage = lazy(() => import('@/pages/share-page'));
 const AppListPage = lazy(() => import('@/pages/bot-api/app-list'));
+const AShareTrading = lazy(() => import('@/pages/a-share'));
 const PlatformAccountManagement = lazy(
   () => import('@/pages/platform-account-management')
 );
@@ -138,6 +139,14 @@ const routes = [
         element: (
           <Suspense fallback={<Loading />}>
             <AppListPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: '/management/a-share',
+        element: (
+          <Suspense fallback={<Loading />}>
+            <AShareTrading />
           </Suspense>
         ),
       },

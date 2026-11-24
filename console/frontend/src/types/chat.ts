@@ -1,3 +1,4 @@
+import type { TeamEvent, TeamState } from './team';
 // 聊天相关的类型定义
 
 // 文件上传支持配置接口
@@ -166,6 +167,8 @@ export interface MessageListType {
   tools?: string[];
   updateTime?: string;
   workflowEventData?: WorkflowEventData;
+  /** Expert-team progress of this answer (live, or rebuilt from the saved trace). */
+  team?: TeamState;
 }
 
 // 溯源数据
@@ -248,6 +251,7 @@ export interface ChatState {
   controllerRef: AbortController; //控制器
   isLoading: boolean; //是否正在加载
   currentToolName: string; //当前调用工具名称
+  team?: TeamState; //专家团进度（流式中）
   traceSource: string; //溯源结果
   deepThinkText: string; //深度思考文本
   currentChatId: number; //当前聊天id
@@ -278,6 +282,7 @@ export interface ChatActions {
   setControllerRef: (controllerRef: AbortController) => void; //设置控制器
   setIsLoading: (isLoading: boolean) => void; //设置是否正在加载
   setCurrentToolName: (currentToolName: string) => void; //设置当前调用工具名称
+  applyTeamEvent: (event: TeamEvent) => void; //更新专家团进度
   setTraceSource: (traceSource: string) => void; //设置溯源结果
   setDeepThinkText: (deepThinkText: string) => void; //设置深度思考文本
   setCurrentChatId: (currentChatId: number) => void; //设置当前聊天id

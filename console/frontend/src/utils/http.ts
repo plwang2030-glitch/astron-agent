@@ -312,6 +312,8 @@ const removePendingRequest = (config?: AxiosRequestConfig): void => {
 
 // 超时时间30s
 axios.defaults.timeout = 30000;
+/** AI 生成类接口（模型推理/生图）耗时明显长于普通接口，单独放宽超时 */
+export const AI_GENERATE_TIMEOUT = 90000;
 // Ajax请求
 axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 axios.defaults.headers.common['Content-Type'] = 'application/json';

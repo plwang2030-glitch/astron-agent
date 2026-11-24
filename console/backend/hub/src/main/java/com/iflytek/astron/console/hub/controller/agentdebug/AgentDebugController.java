@@ -26,9 +26,13 @@ public class AgentDebugController {
 
     @GetMapping("/sessions")
     @Operation(summary = "List agent debug sessions")
-    public ApiResult<List<AgentDebugSessionDto>> listSessions(@RequestParam Integer botId) {
-        return ApiResult.success(
-                agentDebugService.listSessions(RequestContextUtil.getUID(), SpaceInfoUtil.getSpaceId(), botId));
+    public ApiResult<List<AgentDebugSessionDto>> listSessions(
+            @RequestParam Integer botId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "50") int limit) {
+        return ApiResult.success(agentDebugService.listSessions(
+                RequestContextUtil.getUID(), SpaceInfoUtil.getSpaceId(), botId, keyword, offset, limit));
     }
 
     @PostMapping("/sessions")

@@ -4,10 +4,12 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.iflytek.astron.console.hub.service.ManagedWebSearchService;
+import com.iflytek.astron.console.hub.service.ashare.AShareToolFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -33,6 +35,13 @@ public class AgentToolCallbackResolver {
     private final SkillToolCallbackFactory skillToolCallbackFactory;
     private final LinkToolCallbackFactory linkToolCallbackFactory;
     private final WorkflowToolCallbackFactory workflowToolCallbackFactory;
+    /** Optional so that tests can build the resolver without the A-share services. */
+    private AShareToolFactory aShareToolFactory;
+
+    @Autowired(required = false)
+    public void setAShareToolFactory(AShareToolFactory aShareToolFactory) {
+        this.aShareToolFactory = aShareToolFactory;
+    }
 
     /**
      * @param openedTool retained for future per-tool gating; built-in tools are always included.
@@ -44,14 +53,70 @@ public class AgentToolCallbackResolver {
      */
     public List<ToolCallback> resolve(String openedTool, String mcpServerUrls, List<JSONObject> skills,
             String tools, String workflows, ChatToolContext context) throws IOException {
+        return resolve(openedTool, mcpServerUrls, skills, tools, workflows, context, true);
+    }
+
+    /**
+     * @param includeBuiltins {@code false} skips the always-on web_search / current_time tools (used by
+     *        callers that supply their own tool set, such as the agent builder).
+     */
+    public List<ToolCallback> resolve(String openedTool, String mcpServerUrls, List<JSONObject> skills,
+            String tools, String workflows, ChatToolContext context, boolean includeBuiltins) throws IOException {
+        return resolve(openedTool, mcpServerUrls, skills, tools, workflows, context, includeBuiltins, null);
+    }
+
+    /**
+     * @param builtinTools opt-in built-in tool groups of the agent ({@code a_share}: A-share market
+     *        data, paper trading, trading lessons and strategy evolution)
+     */
+    public List<ToolCallback> resolve(String openedTool, String mcpServerUrls, List<JSONObject> skills,
+            String tools, String workflows, ChatToolContext context, boolean includeBuiltins,
+            List<String> builtinTools) throws IOException {
         List<ToolCallback> callbacks = new ArrayList<>();
-        callbacks.add(new WebSearchToolCallback(managedWebSearchService, context));
-        callbacks.add(new CurrentTimeToolCallback());
+        if (hasAShare(builtinTools)) {
+            callbacks.addAll(aShareToolFactory.create(context));
+        }
+        if (includeBuiltins) {
+            callbacks.add(new WebSearchToolCallback(managedWebSearchService, context));
+            callbacks.add(new CurrentTimeToolCallback());
+        }
         callbacks.addAll(mcpToolCallbackFactory.build(parseMcpUrls(mcpServerUrls), context));
         callbacks.addAll(skillToolCallbackFactory.build(skills));
         callbacks.addAll(linkToolCallbackFactory.build(parseToolIds(tools), context));
         callbacks.addAll(workflowToolCallbackFactory.build(parseFlowIds(workflows), context));
         return callbacks;
+    }
+
+    /**
+     * Prompt section for the agent's opt-in tool groups (the A-share trading memory); empty for none.
+     */
+    public String builtinContextPrompt(List<String> builtinTools, String userId) {
+        if (!hasAShare(builtinTools) || StringUtils.isBlank(userId)) {
+            return "";
+        }
+        return StringUtils.defaultString(aShareToolFactory.contextPrompt(userId));
+    }
+
+    private boolean hasAShare(List<String> builtinTools) {
+        return aShareToolFactory != null && builtinTools != null && builtinTools.contains(AShareToolFactory.GROUP);
+    }
+
+    /** Parses the saved {@code builtin_tools} JSON array; tolerant of malformed input. */
+    public static List<String> parseBuiltinTools(String json) {
+        if (StringUtils.isBlank(json)) {
+            return List.of();
+        }
+        try {
+            return JSON.parseArray(json.trim(), String.class)
+                    .stream()
+                    .filter(StringUtils::isNotBlank)
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
+        } catch (Exception e) {
+            log.warn("Invalid builtin_tools json, bodyBytes={}", json.getBytes(StandardCharsets.UTF_8).length);
+            return List.of();
+        }
     }
 
     /**

@@ -70,6 +70,7 @@ public class ProjectContent {
     public static final String FILE_SOURCE_CBG_RAG_STR = "CBG-RAG";
     public static final String FILE_SOURCE_RAG_FLOW_RAG_STR = "Ragflow-RAG";
     public static final String FILE_SOURCE_SPARK_RAG_STR = "SparkDesk-RAG";
+    public static final String FILE_SOURCE_VOLCENGINE_RAG_STR = "Volcengine-RAG";
 
 
     // Custom user token for launching evaluation service
@@ -136,6 +137,14 @@ public class ProjectContent {
      * @param source the source string to check for Spark RAG compatibility, must not be null
      * @return true if the source is Spark RAG compatible, false otherwise
      */
+    /**
+     * Volcengine knowledge base (VikingDB) bound by id: documents are uploaded, parsed and chunked in
+     * the Volcengine console; the platform only retrieves from it.
+     */
+    public static boolean isVolcengineRag(String source) {
+        return FILE_SOURCE_VOLCENGINE_RAG_STR.equals(source);
+    }
+
     public static boolean isSparkRagCompatible(String source) {
         if (bizConfig == null || bizConfig.getSparkRagCompatibleSources() == null) {
             // Fallback to original logic if config is not available

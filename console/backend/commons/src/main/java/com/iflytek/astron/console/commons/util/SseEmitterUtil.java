@@ -28,7 +28,8 @@ import java.util.stream.Stream;
 @Slf4j
 public class SseEmitterUtil {
 
-    private static final long DEFAULT_SSE_TIMEOUT_MS = 8 * 60 * 1000L;
+    /** Default lifetime of chat SSE responses; long-running work should finish before it. */
+    public static final long DEFAULT_SSE_TIMEOUT_MS = 8 * 60 * 1000L;
     private static final String END_DATA = "{\"end\":true,\"timestamp\":" + System.currentTimeMillis() + "}";
 
     private static final Cache<String, Boolean> streamStopSignalSet = CacheBuilder.newBuilder()

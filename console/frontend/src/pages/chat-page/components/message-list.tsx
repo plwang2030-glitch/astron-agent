@@ -1,3 +1,5 @@
+import TeamProgress from '@/components/team-progress';
+import { teamFromTrace } from '@/types/team';
 import {
   ReactElement,
   useEffect,
@@ -77,10 +79,12 @@ const MessageList = (props: {
     });
   };
 
+  // 后台运行的回答保存后会替换占位消息（条数不变），所以也按最后一条消息的 id 滚动
+  const lastMessageId = messageList[messageList.length - 1]?.id;
   useEffect((): void => {
     bindTagClickEvent();
     scrollAnchorRef.current?.scrollIntoView();
-  }, [messageList.length, streamId]);
+  }, [messageList.length, streamId, lastMessageId]);
 
   useEffect((): void => {
     let advancedConfig: any = {};
@@ -248,12 +252,21 @@ const MessageList = (props: {
             )}
 
             {/* 使用工具 */}
+            {/* 专家团进度 */}
+            <TeamProgress
+              team={item.team ?? teamFromTrace(item.traceSource)}
+              // 刷新后历史回答没有 sid，需同时有进行中的流才算「汇总中」
+              streaming={isLastMessage && !!streamId && !item.sid}
+            />
             <UseToolsInfo
               allToolsList={item?.tools || []}
               loading={!isLoading && !!streamId}
             />
             {/* 思考链 */}
-            <DeepThinkProgress answerItem={item} />
+            <DeepThinkProgress
+              answerItem={item}
+              streaming={isLastMessage && !!streamId && !item.sid}
+            />
             {/* 回答内容 */}
             <MarkdownRender
               content={messageContent}

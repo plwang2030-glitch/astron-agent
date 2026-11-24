@@ -133,6 +133,7 @@ class WorkflowAgentRunnerBuilder(BaseApiBuilder):
             "1": "AIUI-RAG2",
             "2": "CBG-RAG",
             "3": "Ragflow-RAG",
+            "4": "Volcengine-RAG",
         }
         tasks = []
 

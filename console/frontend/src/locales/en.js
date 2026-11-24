@@ -369,6 +369,7 @@ export const en = {
     resourceManagement: 'Resource Management',
     appManagement: 'App Management',
     platformAccountManagement: 'Platform Accounts',
+    aShareTrading: 'Paper Trading',
 
     // Order type translations
     orderTypes: {
@@ -394,7 +395,7 @@ export const en = {
     teamEnterpriseEdition: 'Team/Enterprise',
 
     // Brand name
-    xingchen: 'Stellar',
+    xingchen: 'SkyLumin',
   },
 
   // Space management related

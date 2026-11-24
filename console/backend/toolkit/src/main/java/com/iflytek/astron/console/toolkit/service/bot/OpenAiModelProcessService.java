@@ -3,11 +3,13 @@ package com.iflytek.astron.console.toolkit.service.bot;
 import com.iflytek.astron.console.commons.constant.ResponseEnum;
 import com.iflytek.astron.console.commons.exception.BusinessException;
 import com.iflytek.astron.console.commons.util.SseEmitterUtil;
+import com.iflytek.astron.console.toolkit.entity.platform.AiCapability;
 import com.iflytek.astron.console.toolkit.entity.platform.PlatformAccountConfigDto;
 import com.iflytek.astron.console.toolkit.entity.spark.chat.ChatResponse;
 import com.iflytek.astron.console.toolkit.service.platform.PlatformAccountService;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionChunk;
@@ -17,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,21 +45,25 @@ public class OpenAiModelProcessService {
         log.info("Starting non-streaming OpenAI API call, prompt: {}", prompt);
 
         try {
-            PlatformAccountConfigDto.AiAbilityChatConfig config = platformAccountService.requireAiAbilityChat();
+            PlatformAccountConfigDto.AiAbilityChatConfig config = platformAccountService.resolveAiAbilityChat();
+            boolean volcengine = platformAccountService.routesToVolcengine(AiCapability.AI_ABILITY_CHAT);
             OpenAIClient client = buildClient(config);
             // Build request parameters
-            ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
+            ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
                     .model(config.getModel())
-                    .addUserMessage(prompt)
-                    .build();
+                    .addUserMessage(prompt);
+            applyProviderOptions(builder, volcengine);
 
             // Call API
-            ChatCompletion completion = client.chat().completions().create(params);
+            long start = System.currentTimeMillis();
+            ChatCompletion completion = client.chat().completions().create(builder.build());
 
             // Extract response content
             String content = completion.choices().getFirst().message().content().orElse("");
 
-            log.info("Non-streaming call completed, response length: {}", content.length());
+            log.info("Non-streaming call completed, provider={}, model={}, costMs={}, response length: {}",
+                    volcengine ? "volcengine" : "default", config.getModel(),
+                    System.currentTimeMillis() - start, content.length());
             return content;
 
         } catch (Exception e) {
@@ -73,7 +80,8 @@ public class OpenAiModelProcessService {
      */
     public SseEmitter processStreaming(String prompt) {
         log.info("Starting streaming OpenAI API call, prompt: {}", prompt);
-        PlatformAccountConfigDto.AiAbilityChatConfig config = platformAccountService.requireAiAbilityChat();
+        PlatformAccountConfigDto.AiAbilityChatConfig config = platformAccountService.resolveAiAbilityChat();
+        boolean volcengine = platformAccountService.routesToVolcengine(AiCapability.AI_ABILITY_CHAT);
         OpenAIClient client = buildClient(config);
 
         // Create SseEmitter
@@ -92,12 +100,13 @@ public class OpenAiModelProcessService {
 
             try {
                 // Build streaming request parameters
-                ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
+                ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
                         .model(config.getModel())
                         .addUserMessage(prompt)
                         .temperature(0.2)
-                        .topP(0.85)
-                        .build();
+                        .topP(0.85);
+                applyProviderOptions(builder, volcengine);
+                ChatCompletionCreateParams params = builder.build();
 
                 // Call streaming API and process response
                 try (StreamResponse<ChatCompletionChunk> streamResponse =
@@ -147,6 +156,19 @@ public class OpenAiModelProcessService {
         });
 
         return emitter;
+    }
+
+    /**
+     * AI Ability Chat serves short, structured helper tasks (persona, one-sentence bot, prompt
+     * optimization, next-question advice). Doubao Seed models think deeply by default, which made a
+     * persona request take 60-90 s and exceed the frontend's 30 s timeout; with thinking disabled the
+     * same request takes ~7 s. {@code thinking} is an Ark extension of the Chat Completions API, so it
+     * is only sent to Volcengine.
+     */
+    static void applyProviderOptions(ChatCompletionCreateParams.Builder builder, boolean volcengine) {
+        if (volcengine) {
+            builder.putAdditionalBodyProperty("thinking", JsonValue.from(Map.of("type", "disabled")));
+        }
     }
 
     private OpenAIClient buildClient(PlatformAccountConfigDto.AiAbilityChatConfig config) {

@@ -1,4 +1,5 @@
 import { ReactElement, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import collapseGrayIcon from '@/assets/imgs/sidebar/collapseGray.svg';
 import SidebarLogo from './sidebar-logo';
 import CreateButton from './create-button';
@@ -12,7 +13,6 @@ import { postChatList } from '@/services/chat';
 import { getFavoriteList } from '@/services/agent-square';
 import { PostChatItem, FavoriteEntry } from '@/types/chat';
 import eventBus from '@/utils/event-bus';
-import CreateApplicationModal from '@/components/create-application-modal';
 import { getMessageCountApi } from '@/services/notification';
 
 const PAGE_SIZE = 45;
@@ -27,7 +27,6 @@ const Sidebar = (): ReactElement => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isPersonCenterOpen, setIsPersonCenterOpen] = useState(false);
   const [noticeModalVisible, setNoticeModalVisible] = useState(false);
-  const [applicationModalVisible, setApplicationModalVisible] = useState(false);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
   // Shared chat data state
@@ -68,8 +67,10 @@ const Sidebar = (): ReactElement => {
     }
   };
 
+  const navigate = useNavigate();
+  // Home page "create" buttons emit createBot; creation now starts from the agent-first entry.
   const createBot = () => {
-    setApplicationModalVisible(true);
+    navigate('/space/agent-create');
   };
 
   useEffect(() => {
@@ -160,12 +161,6 @@ const Sidebar = (): ReactElement => {
             setNoticeModalVisible(false);
           }}
           onMessageRead={getMessageCount}
-        />
-        <CreateApplicationModal
-          visible={applicationModalVisible}
-          onCancel={() => {
-            setApplicationModalVisible(false);
-          }}
         />
       </div>
     </div>

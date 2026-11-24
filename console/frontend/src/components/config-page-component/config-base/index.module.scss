@@ -547,10 +547,93 @@
 .workbenchHistoryList {
   min-height: 0;
   overflow: auto;
-  scrollbar-width: none;
+  // 记录多时需要让用户看出可以滚动：细滚动条，悬停时加深
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+
+  &:hover {
+    scrollbar-color: #c3cfe4 transparent;
+  }
 
   &::-webkit-scrollbar {
-    display: none;
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: transparent;
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background: #c3cfe4;
+  }
+}
+
+// 对话页记录通常只有一两条，不与调试历史平分高度，最多显示约三条
+.workbenchHistoryCompact {
+  flex: 0 0 auto;
+  max-height: 220px;
+  border-top: 1px solid #d9e3f6;
+}
+
+.workbenchHistoryGroupLabel {
+  padding: 8px 12px 4px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.workbenchHistoryItemRow {
+  position: relative;
+  padding-right: 32px;
+
+  &:hover .workbenchHistoryDelete,
+  &:focus-within .workbenchHistoryDelete {
+    opacity: 1;
+  }
+}
+
+.workbenchHistoryDelete {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  color: #94a3b8;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.15s;
+
+  &:hover {
+    color: #ef4444;
+    background: #fee2e2;
+  }
+}
+
+.workbenchHistoryLoadMore {
+  width: 100%;
+  margin: 4px 0 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  color: #6356ea;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.65);
+  }
+
+  &:disabled {
+    color: #94a3b8;
+    cursor: default;
   }
 }
 

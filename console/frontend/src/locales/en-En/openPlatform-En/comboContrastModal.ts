@@ -18,7 +18,7 @@ const translation = {
   comboContrastEnterpriseVersion: 'Enterprise Version',
   comboModal: {
     freeUse: 'Free Use',
-    useAgent: ' XingChen Agent ',
+    useAgent: ' SkyLumin ',
     orUpgrade: 'Or Upgrade to Higher Package',
     comboList: 'Package List',
   },

@@ -183,6 +183,10 @@ public class FileInfoV2Service extends ServiceImpl<FileInfoV2Mapper, FileInfoV2>
 
         Repo repo = repoService.getById(repoId);
         dataPermissionCheckTool.checkRepoBelong(repo);
+        if (ProjectContent.isVolcengineRag(tag) || (repo != null && ProjectContent.isVolcengineRag(repo.getTag()))) {
+            // Documents of a bound Volcengine knowledge base are managed in the Volcengine console.
+            throw new BusinessException(ResponseEnum.REPO_VOLCENGINE_OPERATION_NOT_SUPPORTED);
+        }
 
         // 4. Calculate character count
         int charCount = countChars(file);

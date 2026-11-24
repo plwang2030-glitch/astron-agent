@@ -295,5 +295,5 @@ export const getMemberRoleOptions = (
   }));
 
 // export const defaultEnterpriseAvatar = 'https://openres.xfyun.cn/xfyundoc/2025-07-29/9a976f35-e51a-4140-817d-bde44e58ffa5/1753780785368/enterpriseAvatar.svg';
-export const defaultEnterpriseAvatar =
-  'https://openres.xfyun.cn/xfyundoc/2025-08-15/4c1ec85b-b8a5-422f-ad09-b398700a218e/1755245023381/building.svg';
+// Served from public/ by the console itself (SkyLumin brand), not from a third-party CDN.
+export const defaultEnterpriseAvatar = '/skylumin-team.svg';

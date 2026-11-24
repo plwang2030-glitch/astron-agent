@@ -391,6 +391,28 @@
   background: #fff;
 }
 
+/* 智能体列表行：右侧放「直接回复用户」开关和删除按钮，宽度随内容 */
+.agentRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.agentRowActions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.agentRowSwitch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+
 .skillRowMeta {
   display: flex;
   flex-direction: column;
@@ -734,7 +756,7 @@
   width: fit-content;
   padding: 0 5px;
   height: 23px;
-  background-image: url("https://aixfyun-cn-bj.xfyun.cn/bbs/45868.54057209624/1.png");
+  background-image: url('https://aixfyun-cn-bj.xfyun.cn/bbs/45868.54057209624/1.png');
   background-repeat: no-repeat;
   background-position: center;
   background-size: cover;

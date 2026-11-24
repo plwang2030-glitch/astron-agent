@@ -1,6 +1,6 @@
 const translation = {
   feedback: '意见反馈',
-  aboutModelOutput: '关于大模型输出内容的意见，请通过星辰Agent页面反馈',
+  aboutModelOutput: '关于大模型输出内容的意见，请通过SkyLumin页面反馈',
   aboutModelOutput2: '按钮来反馈，感谢您的支持~',
   title: '意见反馈',
   feedbackTitle: '星辰大模型应用开发平台-意见反馈',

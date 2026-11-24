@@ -1,6 +1,7 @@
 import type { AgentSkill } from '@/types/skill';
 import type { AgentTool } from '@/types/plugin-store';
 import type { AgentWorkflow } from '@/types/agent-workflow';
+import type { AgentRef } from '@/types/agent-ref';
 
 export const isValidMcpServerUrl = (url: string): boolean => {
   const value = url.trim();
@@ -138,6 +139,41 @@ export const normalizeWorkflows = (workflows?: unknown): AgentWorkflow[] => {
   return result.slice(0, 30);
 };
 
+export const MAX_AGENTS = 10;
+
+export const normalizeAgents = (agents?: unknown): AgentRef[] => {
+  let source = agents;
+  if (typeof agents === 'string') {
+    try {
+      source = JSON.parse(agents);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(source)) {
+    return [];
+  }
+
+  const seen = new Set<number>();
+  const result: AgentRef[] = [];
+  for (const item of source) {
+    const botId = Number(item?.botId);
+    if (!Number.isInteger(botId) || botId <= 0 || seen.has(botId)) {
+      continue;
+    }
+    seen.add(botId);
+    result.push({
+      botId,
+      name: String(item?.name ?? ''),
+      description: String(item?.description ?? ''),
+      avatar: item?.avatar ? String(item.avatar) : undefined,
+      direct: item?.direct === true ? true : undefined,
+    });
+  }
+  return result.slice(0, MAX_AGENTS);
+};
+
 export const hasInvalidMcpServerUrls = (urls?: unknown): boolean => {
   if (!urls) {
     return false;
@@ -163,4 +199,26 @@ export const hasInvalidMcpServerUrls = (urls?: unknown): boolean => {
     const value = item.trim();
     return Boolean(value) && !isValidMcpServerUrl(value);
   });
+};
+
+/** 可选的内置工具组；目前只有 A股投研（行情、模拟账户、交易经验、策略进化） */
+export const A_SHARE_TOOL_GROUP = 'a_share';
+
+export const normalizeBuiltinTools = (value?: unknown): string[] => {
+  let source = value;
+  if (typeof value === 'string') {
+    try {
+      source = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(source)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      source.filter((item): item is string => item === A_SHARE_TOOL_GROUP)
+    )
+  );
 };

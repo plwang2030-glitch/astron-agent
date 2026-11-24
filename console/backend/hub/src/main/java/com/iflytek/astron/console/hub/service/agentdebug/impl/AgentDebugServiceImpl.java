@@ -40,14 +40,28 @@ public class AgentDebugServiceImpl implements AgentDebugService {
 
     @Override
     public List<AgentDebugSessionDto> listSessions(String uid, Long spaceId, Integer botId) {
+        return listSessions(uid, spaceId, botId, null, 0, MAX_SESSION_SIZE);
+    }
+
+    @Override
+    public List<AgentDebugSessionDto> listSessions(
+            String uid, Long spaceId, Integer botId, String keyword, int offset, int limit) {
         validateUser(uid);
         checkBotPermission(uid, spaceId, botId);
+        int safeOffset = Math.max(0, offset);
+        int safeLimit = limit <= 0 ? MAX_SESSION_SIZE : Math.min(limit, MAX_SESSION_SIZE);
+        String trimmedKeyword = StringUtils.trimToNull(keyword);
         LambdaQueryWrapper<AgentDebugSession> query = Wrappers.lambdaQuery(AgentDebugSession.class)
                 .eq(AgentDebugSession::getBotId, botId)
                 .eq(AgentDebugSession::getUid, uid)
                 .eq(AgentDebugSession::getIsDelete, 0)
+                .like(trimmedKeyword != null, AgentDebugSession::getTitle, escapeLike(trimmedKeyword))
                 .orderByDesc(AgentDebugSession::getUpdateTime)
-                .last("LIMIT " + MAX_SESSION_SIZE);
+                .orderByDesc(AgentDebugSession::getCreateTime)
+                // Unique tiebreaker: sessions updated in the same second must keep a stable order across pages.
+                .orderByDesc(AgentDebugSession::getId)
+                // offset/limit are bounded integers, not user strings.
+                .last("LIMIT " + safeLimit + " OFFSET " + safeOffset);
         addSpaceCondition(query, spaceId);
         return sessionMapper.selectList(query)
                 .stream()
@@ -142,6 +156,14 @@ public class AgentDebugServiceImpl implements AgentDebugService {
                 .eq(AgentDebugSession::getIsDelete, 0);
         addSpaceCondition(updateWrapper, spaceId);
         sessionMapper.update(update, updateWrapper);
+    }
+
+    /** Escapes LIKE wildcards so user keywords match literally (MySQL default escape is backslash). */
+    static String escapeLike(String keyword) {
+        if (keyword == null) {
+            return null;
+        }
+        return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     private void validateUser(String uid) {

@@ -239,6 +239,17 @@ function Media({ resetText }) {
 
     handlemessage: function (data) {
       console.log('response=> first time', this.text);
+      if (data.provider === 'volcengine') {
+        // 火山引擎返回截至当前的完整识别文本
+        if (data.action === 'result') {
+          this.text = data.text || '';
+          resetText(this.text);
+        } else if (data.action === 'error') {
+          console.error('Volcengine ASR error', data.code, data.desc);
+          message.error('语音识别失败，请检查火山引擎（字节）豆包语音配置');
+        }
+        return;
+      }
       if (data.action === 'result') {
         const result = JSON.parse(data.data);
         localStorage.setItem('recorderSid', data.sid);

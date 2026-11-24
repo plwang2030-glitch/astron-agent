@@ -39,10 +39,16 @@ public class ReadSkillToolCallback implements ToolCallback {
 
     @Override
     public ToolDefinition getToolDefinition() {
+        // The skill's own description says when to use it; without it the model only sees a name and
+        // rarely opens the skill.
+        String whenToUse = StringUtils.isBlank(description)
+                ? ""
+                : " When to use: " + StringUtils.abbreviate(StringUtils.normalizeSpace(description), 300) + ".";
         return ToolDefinition.builder()
                 .name("read_skill_" + skillId)
-                .description("Read SKILL.md and referenced files for skill '" + name
-                        + "'. First call with empty parameters to read SKILL.md and get the resource manifest. "
+                .description("Read SKILL.md and referenced files for skill '" + name + "'." + whenToUse
+                        + " Read it before handling a matching request and follow its steps. "
+                        + "First call with empty parameters to read SKILL.md and get the resource manifest. "
                         + "If SKILL.md references a relative path like references/beijing.md, call again with that path.")
                 .inputSchema(INPUT_SCHEMA)
                 .build();

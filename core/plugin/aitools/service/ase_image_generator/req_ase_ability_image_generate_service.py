@@ -12,14 +12,24 @@ from common.otlp.log_trace.node_trace_log import NodeTraceLog
 from common.otlp.metrics.meter import Meter
 from common.utils.hmac_auth import HMACAuth
 from fastapi import Request
+from loguru import logger as log
 from plugin.aitools.api.decorators.api_service import api_service
 from plugin.aitools.api.schemas.types import BaseResponse, SuccessResponse
 from plugin.aitools.common.clients.adapters import SpanLike
 from plugin.aitools.common.clients.aiohttp_client import HttpClient
+from plugin.aitools.common.clients.volcengine_client import (
+    ark_generate_image,
+    seedream_size,
+)
 from plugin.aitools.common.exceptions.error.code_enums import CodeEnums
 from plugin.aitools.common.exceptions.exceptions import ServiceException
 from plugin.aitools.const.const import IMAGE_GENERATE_URL_KEY
-from plugin.aitools.platform_account_config import get_iflytek_open_platform_credentials
+from plugin.aitools.platform_account_config import (
+    CAPABILITY_IMAGE_GENERATION,
+    get_iflytek_open_platform_credentials,
+    get_volcengine_ark_config,
+    uses_volcengine,
+)
 from plugin.aitools.utils.oss_utils import upload_file
 from pydantic import BaseModel
 
@@ -85,6 +95,20 @@ async def req_ase_ability_image_generate_service(
     meter: Optional[Meter] = None,
     node_trace: Optional[NodeTraceLog] = None,
 ) -> BaseResponse:
+    if uses_volcengine(CAPABILITY_IMAGE_GENERATION):
+        ark_config = get_volcengine_ark_config()
+        size = seedream_size(body.width, body.height)
+        log.info(
+            f"Image generation routed to volcengine, model={ark_config.image_model}, "
+            f"requested={body.width}x{body.height}, size={size}"
+        )
+        image_bytes = await ark_generate_image(ark_config, body.prompt, size, span)
+        image_url = await upload_file(str(uuid.uuid4()) + ".jpg", image_bytes, span)
+        return SuccessResponse(
+            data={"image_url": image_url, "image_url_md": f"![]({image_url})"},
+            sid=request.state.sid,
+        )
+
     url = os.getenv(IMAGE_GENERATE_URL_KEY, "")
     credentials = get_iflytek_open_platform_credentials()
 

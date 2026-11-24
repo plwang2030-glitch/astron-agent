@@ -2,7 +2,22 @@ export type PlatformAccountType =
   | 'iflytek_open_platform'
   | 'ai_ability_chat'
   | 'virtual_man'
-  | 'knowledge_platform';
+  | 'knowledge_platform'
+  | 'volcengine'
+  | 'ai_capability_routing';
+
+export type AiProvider = 'iflytek' | 'volcengine';
+
+export type AiCapabilityKey =
+  | 'defaultChat'
+  | 'aiAbilityChat'
+  | 'webSearch'
+  | 'avatarImage'
+  | 'imageGeneration'
+  | 'imageUnderstanding'
+  | 'ocr'
+  | 'tts'
+  | 'asr';
 
 export interface PlatformAccountConfig {
   iflytekOpenPlatform?: {
@@ -33,6 +48,27 @@ export interface PlatformAccountConfig {
       datasetId?: string;
     };
   };
+  volcengine?: {
+    arkBaseUrl?: string;
+    arkApiKey?: string;
+    chatModel?: string;
+    visionModel?: string;
+    imageModel?: string;
+    webSearchSource?: 'doubao' | 'plugin' | 'doubao_api';
+    /** 豆包搜索 API Key（webSearchSource 为 doubao_api 时使用） */
+    searchApiKey?: string;
+    speechApiKey?: string;
+    speechAppId?: string;
+    speechAccessToken?: string;
+    ttsResourceId?: string;
+    ttsSpeaker?: string;
+    asrResourceId?: string;
+    knowledgeApiKey?: string;
+    knowledgeHost?: string;
+    knowledgeProject?: string;
+    knowledgeCollection?: string;
+  };
+  aiCapabilityRouting?: Partial<Record<AiCapabilityKey, AiProvider>>;
   configured?: boolean;
 }
 
@@ -51,4 +87,7 @@ export interface PlatformAccountRuntimeConfig {
   virtualManConfigured: boolean;
   ragflowConfigured: boolean;
   xinghuoKnowledgeConfigured: boolean;
+  volcengineConfigured: boolean;
+  volcengineKnowledgeConfigured: boolean;
+  volcengineKnowledgeCollection?: string | null;
 }

@@ -9,8 +9,7 @@ import { useSpaceI18n } from '@/pages/space/hooks/use-space-i18n';
 import { useSpaceType } from '@/hooks/use-space-type';
 import { useEnterprise } from '@/hooks/use-enterprise';
 import { defaultEnterpriseAvatar } from '@/constants/config';
-import agentLogoText from '@/assets/imgs/sidebar/agentLogoText.svg';
-import agentLogoTextEn from '@/assets/imgs/sidebar/agentLogoTextEn.svg';
+import brandLogo from '@/assets/imgs/brand/skylumin-logo.svg';
 import creatorImg from '@/assets/imgs/space/creator.svg';
 import defaultUploadIcon from '@/assets/imgs/space/upload.png';
 import { useTranslation } from 'react-i18next';
@@ -27,8 +26,7 @@ const TeamCreate: React.FC = () => {
   const [reUploadImg, setReUploadImg] = useState(false);
   const [triggerChild, setTriggerChild] = useState(false);
   const { type } = useParams();
-  const { t, i18n } = useTranslation();
-  const isEnglish = i18n.language === 'en';
+  const { t } = useTranslation();
   const roleText = useMemo(() => {
     const key = user?.roleType as keyof typeof roleTextMap | undefined;
     return key && key in roleTextMap ? roleTextMap[key] : '-';
@@ -88,11 +86,7 @@ const TeamCreate: React.FC = () => {
     <div className={styles.teamCreateContainer}>
       {/* Logo */}
       <div className={styles.logo}>
-        <img
-          src={isEnglish ? agentLogoText : agentLogoTextEn}
-          alt="Logo"
-          className={styles.logoImage}
-        />
+        <img src={brandLogo} alt="SkyLumin" className={styles.logoImage} />
       </div>
 
       {/* 主要内容 */}

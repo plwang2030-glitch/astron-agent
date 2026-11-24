@@ -1,3 +1,5 @@
+import { getFixedUrl } from '@/components/workflow/utils';
+
 class Ws {
   // 要连接的URL
   url;
@@ -22,8 +24,22 @@ class Ws {
     this.tokenParam = tokenParam;
   }
 
+  // 火山引擎（字节）语音识别经 console-hub 中转，使用一次性 ticket 鉴权
+  isVolcengine() {
+    return this.tokenParam?.provider === 'volcengine';
+  }
+
   // 生成握手参数
   assembleRequestUrl() {
+    if (this.isVolcengine()) {
+      const httpUrl = new URL(
+        getFixedUrl(this.tokenParam.url),
+        window.location.href
+      );
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      httpUrl.searchParams.set('ticket', this.tokenParam.ticket);
+      return httpUrl.toString();
+    }
     return (
       `${this.tokenParam.url}` +
       '?appid=' +
@@ -99,6 +115,8 @@ class Ws {
 
   // 重连
   reconnection() {
+    // ticket 只能使用一次，火山引擎连接不自动重连
+    if (this.isVolcengine()) return;
     // 防止重复
     if (this.isReconnectionLoading) return;
 

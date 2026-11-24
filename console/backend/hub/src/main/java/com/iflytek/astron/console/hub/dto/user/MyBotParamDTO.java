@@ -19,6 +19,9 @@ public class MyBotParamDTO {
     // Version, 1 is agent, 3 is workflow
     private Integer version;
 
+    /** Bot versions to leave out, e.g. [3] to hide workflows from agent lists. */
+    private List<Integer> excludeVersions;
+
     private int status;
 
     private int pageIndex = 1;

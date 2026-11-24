@@ -14,7 +14,6 @@ import {
   GetAgentListResponse,
 } from '@/services/agent';
 import DeleteBot from './components/delete-bot';
-import CreateApplicationModal from '@/components/create-application-modal';
 import { debounce } from 'lodash';
 import RetractableInput from '@/components/ui/global/retract-table-input';
 import useChat from '@/hooks/use-chat';
@@ -81,8 +80,6 @@ function index() {
   const [status, setStatus] = useState(0);
   const [sort, setSort] = useState('createTime');
   const [version, setVersion] = useState(0);
-  const [ApplicationModalVisible, setCreateModalVisible] =
-    useState<boolean>(false); //创建应用
   const [operationId, setOperationId] = useState<string | null>(null);
   const { spaceId } = useSpaceStore();
   const { handleToChat } = useChat();
@@ -163,6 +160,9 @@ function index() {
 
     if (version !== 0) {
       params.version = version;
+    } else {
+      // 工作流在「资源管理 - 工作流」中管理，智能体列表只列智能体。
+      params.excludeVersions = [3];
     }
 
     getAgentList(params)
@@ -211,6 +211,9 @@ function index() {
 
     if (version !== 0) {
       params.version = version;
+    } else {
+      // 工作流在「资源管理 - 工作流」中管理，智能体列表只列智能体。
+      params.excludeVersions = [3];
     }
 
     getAgentList(params)
@@ -367,13 +370,6 @@ function index() {
 
   return (
     <div className="w-full h-full overflow-hidden pb-6">
-      <CreateApplicationModal
-        visible={ApplicationModalVisible}
-        onCancel={() => {
-          setCreateModalVisible(false);
-        }}
-      />
-
       {deleteModal && (
         <DeleteBot
           botDetail={botDetail}
@@ -420,7 +416,6 @@ function index() {
               options={[
                 { label: t('agentPage.agentPage.allTypes'), value: 0 },
                 { label: t('agentPage.agentPage.instructionType'), value: 1 },
-                { label: t('agentPage.agentPage.workflowType'), value: 3 },
                 { label: '语音*虚拟人', value: 4 },
               ]}
             />
@@ -482,7 +477,7 @@ function index() {
                 if (!user?.login && !user?.uid) {
                   return jumpToLogin();
                 }
-                setCreateModalVisible(true);
+                navigate('/space/agent-create');
               }}
             >
               <PlusOutlined />
@@ -884,7 +879,7 @@ function index() {
                   if (!user?.login && !user?.uid) {
                     return jumpToLogin();
                   }
-                  setCreateModalVisible(true);
+                  navigate('/space/agent-create');
                 }}
                 style={{ margin: '0 auto' }}
               >

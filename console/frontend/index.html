@@ -2,11 +2,11 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/agent-icon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/skylumin-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Astron Agent</title>
-    <meta name="description" content="Astron Agent" />
-    <meta name="keywords" content="Astron Agent" />
+    <title>SkyLumin</title>
+    <meta name="description" content="SkyLumin" />
+    <meta name="keywords" content="SkyLumin" />
   </head>
 
   <body>
@@ -16,37 +16,41 @@
     </script>
     <script src="/runtime-config.js"></script>
     <script>
+      // 重新部署后旧的 hash chunk 已被删除，已打开的页面懒加载时会 404。
+      // 处理方式：刷新一次以加载新的 index.html；5s 内重复失败则不再拦截，交给错误边界显示，避免死循环。
+      // 注意：只有确实触发了刷新才能 preventDefault，否则 Vite 会把失败的 import 当成成功，
+      // React.lazy 读取 undefined.default 导致页面崩溃。
       const RELOAD_FLAG = '__VITE_PRELOAD_FIXED_AT__';
       let reloading = false;
 
-      function safeReload() {
-        if (reloading) return;
-        reloading = true;
+      // 刷新完成后去掉缓存破坏参数，保持地址栏干净
+      (function stripReloadParam() {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('v') === sessionStorage.getItem(RELOAD_FLAG)) {
+          url.searchParams.delete('v');
+          window.history.replaceState(window.history.state, '', url.toString());
+        }
+      })();
 
+      function safeReload() {
+        if (reloading) return true;
         const now = Date.now();
         const last = Number(sessionStorage.getItem(RELOAD_FLAG) || '0');
-        if (now - last < 5000) return; // 5s 内只触发一次，防抖+防死循环
+        if (now - last < 5000) return false;
         sessionStorage.setItem(RELOAD_FLAG, String(now));
-
-        // 缓存破坏：追加时间戳参数，避免再次请求旧 chunk
+        reloading = true;
+        // 缓存破坏：追加时间戳参数，确保拿到最新的 index.html
         const url = new URL(window.location.href);
         url.searchParams.set('v', String(now));
+        window.location.replace(url.toString());
+        return true;
       }
 
       function suppressAndReload(e) {
-        console.log('suppressAndReload error:', e);
+        if (!safeReload()) return;
         e?.preventDefault?.();
         e?.stopPropagation?.();
         e?.stopImmediatePropagation?.();
-        safeReload();
-      }
-
-      function suppressAndReload(e) {
-        console.log('suppressAndReload error:', e);
-        e?.preventDefault?.();
-        e?.stopPropagation?.();
-        e?.stopImmediatePropagation?.();
-        safeReload();
       }
 
       // 专属事件：Vite 预加载失败

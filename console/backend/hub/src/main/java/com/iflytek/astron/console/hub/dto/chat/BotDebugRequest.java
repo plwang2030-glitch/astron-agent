@@ -77,6 +77,24 @@ public class BotDebugRequest {
     private String workflows;
 
     /**
+     * Attached agents JSON list ({@code [{"botId":1,"name":"..."}]})
+     */
+    private String agents;
+    /**
+     * Pick experts from the space's published agents per question (expert team)
+     */
+    private Boolean autoTeam;
+
+    /**
+     * 深度思考 switch; null or true keeps the model default, false disables reasoning where supported
+     */
+    private Boolean deepThinking;
+    /**
+     * Opt-in built-in tool groups JSON ({@code ["a_share"]}); null uses the saved value
+     */
+    private String builtinTools;
+
+    /**
      * Model name
      */
     private String model = "spark";

@@ -23,6 +23,7 @@ import {
   Popconfirm,
   Empty,
   Tag,
+  Tooltip,
 } from 'antd';
 
 import ConfigHeader from '@/components/config-page-component/config-header/ConfigHeader';
@@ -55,6 +56,14 @@ import usePrompt from '@/hooks/use-prompt';
 import { v4 as uuid } from 'uuid';
 import eventBus from '@/utils/event-bus';
 import { debounce } from 'lodash';
+import dayjs from 'dayjs';
+
+/** 服务端返回无时区的本地时间，前端临时会话是 ISO UTC，统一按本地时间显示 */
+const formatDebugSessionTime = (value?: string): string => {
+  if (!value) return '';
+  const time = dayjs(value);
+  return time.isValid() ? time.format('MM-DD HH:mm') : value;
+};
 import { useTranslation } from 'react-i18next';
 import { getLanguageCode } from '@/utils/http';
 import {
@@ -94,16 +103,22 @@ import {
   normalizeSkills,
   normalizeTools,
   normalizeWorkflows,
+  normalizeAgents,
+  normalizeBuiltinTools,
 } from './mcp-url-config';
 import type { AgentSkill } from '@/types/skill';
 import type { AgentWorkflow } from '@/types/agent-workflow';
+import type { AgentRef } from '@/types/agent-ref';
 import { VcnItem } from '@/components/speaker-modal';
-import { getVcnList } from '@/services/chat';
-import type { MessageListType } from '@/types/chat';
+import { getChatHistory, getVcnList, postChatList } from '@/services/chat';
+import type { MessageListType, PostChatItem } from '@/types/chat';
+import { formatHistoryToMessages } from '@/utils';
+import ReadonlyMessageList from '@/components/prompt-try/message-list';
 import {
   AgentDebugSession,
   buildDebugSessionTitle,
   createAgentDebugSession,
+  AGENT_DEBUG_SESSION_PAGE_SIZE,
   deleteAgentDebugSession,
   getAgentDebugMessages,
   getAgentDebugSessions,
@@ -140,25 +155,46 @@ const getDebugSessionTitleFromMessages = (
   return userMessage?.message?.trim().slice(0, 30) || '';
 };
 
-const getDebugSessionSearchText = (session: AgentDebugSession): string => {
-  return [
-    buildDebugSessionTitle(session),
-    session.createdAt || '',
-    session.updatedAt || '',
-  ]
-    .join(' ')
-    .toLowerCase();
+type DebugSessionGroupKey = 'today' | 'yesterday' | 'week' | 'earlier';
+
+/** 按最近更新时间分组：今天 / 昨天 / 7 天内 / 更早 */
+const groupDebugSessions = (
+  sessions: AgentDebugSession[]
+): { key: DebugSessionGroupKey; sessions: AgentDebugSession[] }[] => {
+  const startOfToday = dayjs().startOf('day');
+  const groups: Record<DebugSessionGroupKey, AgentDebugSession[]> = {
+    today: [],
+    yesterday: [],
+    week: [],
+    earlier: [],
+  };
+  sessions.forEach(session => {
+    const time = dayjs(session.updatedAt || session.createdAt);
+    let key: DebugSessionGroupKey = 'earlier';
+    if (time.isValid()) {
+      if (!time.isBefore(startOfToday)) key = 'today';
+      else if (!time.isBefore(startOfToday.subtract(1, 'day')))
+        key = 'yesterday';
+      else if (!time.isBefore(startOfToday.subtract(7, 'day'))) key = 'week';
+    }
+    groups[key].push(session);
+  });
+  return (['today', 'yesterday', 'week', 'earlier'] as const)
+    .map(key => ({ key, sessions: groups[key] }))
+    .filter(group => group.sessions.length > 0);
 };
 
-const filterDebugSessions = (
-  sessions: AgentDebugSession[],
-  keyword: string
-): AgentDebugSession[] => {
-  const normalizedKeyword = keyword.trim().toLowerCase();
-  if (!normalizedKeyword) return [];
-  return sessions.filter(session =>
-    getDebugSessionSearchText(session).includes(normalizedKeyword)
-  );
+/** 今天、昨天只显示时刻，更早显示日期 */
+const formatDebugSessionGroupTime = (
+  value: string | undefined,
+  groupKey: DebugSessionGroupKey
+): string => {
+  if (!value) return '';
+  const time = dayjs(value);
+  if (!time.isValid()) return value;
+  return groupKey === 'today' || groupKey === 'yesterday'
+    ? time.format('HH:mm')
+    : time.format('MM-DD HH:mm');
 };
 
 const buildDefaultMemoryConfig = (botId: number): AgentMemoryConfig => ({
@@ -382,6 +418,13 @@ const BaseConfig: React.FC<ChatProps> = ({
   const [debugSessionKey, setDebugSessionKey] = useState(0);
   const [debugHistoryLoading, setDebugHistoryLoading] = useState(false);
   const [debugHistorySearchQuery, setDebugHistorySearchQuery] = useState('');
+  const [debugHasMore, setDebugHasMore] = useState(false);
+  const [debugLoadingMore, setDebugLoadingMore] = useState(false);
+  const [debugSearchResults, setDebugSearchResults] = useState<
+    AgentDebugSession[]
+  >([]);
+  const [debugSearchLoading, setDebugSearchLoading] = useState(false);
+  const debugSearchRequestRef = useRef(0);
   const [memoryConfig, setMemoryConfig] = useState<AgentMemoryConfig | null>(
     null
   );
@@ -394,6 +437,19 @@ const BaseConfig: React.FC<ChatProps> = ({
   const activeDebugSessionIdRef = useRef('');
   const debugSessionScopeRef = useRef(0);
   const debugMessageRevisionRef = useRef(0);
+  // 「对话」页产生的聊天记录：在配置页内只读查看，不跳转页面
+  const [chatPageRecords, setChatPageRecords] = useState<PostChatItem[]>([]);
+  const [activeChatPageRecordId, setActiveChatPageRecordId] = useState<
+    number | null
+  >(null);
+  const [chatPageMessages, setChatPageMessages] = useState<MessageListType[]>(
+    []
+  );
+  const [chatPageMessagesLoading, setChatPageMessagesLoading] = useState(false);
+  const chatPageRequestRef = useRef(0);
+  const handleStartDebugSessionRef = useRef<(() => void) | null>(null);
+  // 当前调试会话创建失败的 scope：同一轮会话不再重试，避免流式输出每次更新都发起创建请求
+  const failedDebugSessionScopeRef = useRef<number | null>(null);
   const creatingDebugSessionRef = useRef<{
     scope: number;
     promise: Promise<AgentDebugSession | null>;
@@ -459,6 +515,10 @@ const BaseConfig: React.FC<ChatProps> = ({
   const [config, setConfig] = useState({});
   const [tools, setTools] = useState<any[]>([]);
   const [workflows, setWorkflows] = useState<AgentWorkflow[]>([]);
+  const [agents, setAgents] = useState<AgentRef[]>([]);
+  const [autoTeam, setAutoTeam] = useState<boolean>(false); // 从专家库自动组队
+  const [deepThinking, setDeepThinking] = useState<boolean>(true); // 深度思考，默认开启
+  const [builtinTools, setBuiltinTools] = useState<string[]>([]); // 内置工具组，如 A股投研 a_share
   const [tree, setTree] = useState<any>([]);
   const [knowledges, setKnowledges] = useState<any[]>([]);
   const [chatModelList, setChatModelList] = useState([
@@ -672,6 +732,10 @@ const BaseConfig: React.FC<ChatProps> = ({
       skills: normalizeSkills(skills),
       tools: normalizeTools(tools),
       workflows: normalizeWorkflows(workflows),
+      agents: normalizeAgents(agents),
+      autoTeam: autoTeam ? 1 : 0,
+      deepThinking: deepThinking ? 1 : 0,
+      builtinTools,
       prologue: prologue,
       ...getModelConfig(model),
       prompt: prompt,
@@ -962,6 +1026,13 @@ const BaseConfig: React.FC<ChatProps> = ({
           setSkills(normalizeSkills(currentConfigData?.skills));
           setTools(normalizeTools(currentConfigData?.tools));
           setWorkflows(normalizeWorkflows(currentConfigData?.workflows));
+          setAgents(normalizeAgents(currentConfigData?.agents));
+          setAutoTeam(Number(currentConfigData?.autoTeam) === 1);
+          // 未保存过（旧数据为空）时保持默认开启
+          setDeepThinking(Number(currentConfigData?.deepThinking ?? 1) !== 0);
+          setBuiltinTools(
+            normalizeBuiltinTools(currentConfigData?.builtinTools)
+          );
           setSupportContextFlag(
             save == 'true'
               ? configPageData?.supportContext == 1
@@ -1253,18 +1324,111 @@ const BaseConfig: React.FC<ChatProps> = ({
 
     setDebugHistoryLoading(true);
     try {
-      const sessions = await getAgentDebugSessions(currentBotId);
-      setDebugSessions(sessions || []);
+      const sessions = (await getAgentDebugSessions(currentBotId)) || [];
+      setDebugSessions(sessions);
+      setDebugHasMore(sessions.length >= AGENT_DEBUG_SESSION_PAGE_SIZE);
     } catch (err) {
       setDebugSessions([]);
+      setDebugHasMore(false);
     } finally {
       setDebugHistoryLoading(false);
     }
   }, [currentBotId]);
 
+  const loadMoreDebugSessions = useCallback(async () => {
+    if (!currentBotId || debugLoadingMore || !debugHasMore) return;
+    setDebugLoadingMore(true);
+    try {
+      const page =
+        (await getAgentDebugSessions(currentBotId, {
+          offset: debugSessions.length,
+        })) || [];
+      // 本页加载期间新建的会话会让 offset 偏移，按 id 去重
+      setDebugSessions(prev => {
+        const known = new Set(prev.map(item => item.id));
+        return [...prev, ...page.filter(item => !known.has(item.id))];
+      });
+      setDebugHasMore(page.length >= AGENT_DEBUG_SESSION_PAGE_SIZE);
+    } catch (err) {
+      console.error('Failed to load more debug sessions', err);
+      message.error(t('configBase.loadMoreFailed'));
+    } finally {
+      setDebugLoadingMore(false);
+    }
+  }, [currentBotId, debugHasMore, debugLoadingMore, debugSessions.length, t]);
+
+  const handleDeleteDebugSession = useCallback(
+    async (session: AgentDebugSession) => {
+      try {
+        await deleteAgentDebugSession(session.id);
+        setDebugSessions(prev => prev.filter(item => item.id !== session.id));
+        setDebugSearchResults(prev =>
+          prev.filter(item => item.id !== session.id)
+        );
+        if (activeDebugSessionIdRef.current === session.id) {
+          handleStartDebugSessionRef.current?.();
+        }
+      } catch (err) {
+        console.error('Failed to delete debug session', err);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     loadDebugSessions();
   }, [loadDebugSessions]);
+
+  const loadChatPageRecords = useCallback(async () => {
+    if (!currentBotId) {
+      setChatPageRecords([]);
+      return;
+    }
+    try {
+      const list = await postChatList();
+      setChatPageRecords(
+        (list || []).filter(item => Number(item.botId) === currentBotId)
+      );
+    } catch (err) {
+      console.error('Failed to load chat page records', err);
+      setChatPageRecords([]);
+    }
+  }, [currentBotId]);
+
+  useEffect(() => {
+    loadChatPageRecords();
+  }, [loadChatPageRecords]);
+
+  const closeChatPageRecord = useCallback(() => {
+    chatPageRequestRef.current += 1;
+    setActiveChatPageRecordId(null);
+    setChatPageMessages([]);
+    setChatPageMessagesLoading(false);
+  }, []);
+
+  const handleSelectChatPageRecord = useCallback(
+    async (record: PostChatItem) => {
+      const requestId = ++chatPageRequestRef.current;
+      setActiveWorkbenchView('chat');
+      setActiveChatPageRecordId(record.id);
+      setChatPageMessages([]);
+      setChatPageMessagesLoading(true);
+      try {
+        const history = await getChatHistory(record.id);
+        if (requestId !== chatPageRequestRef.current) return;
+        setChatPageMessages(formatHistoryToMessages(history));
+      } catch (err) {
+        if (requestId !== chatPageRequestRef.current) return;
+        console.error('Failed to load chat page history', err);
+        message.error(t('configBase.chatPageHistoryLoadFailed'));
+      } finally {
+        if (requestId === chatPageRequestRef.current) {
+          setChatPageMessagesLoading(false);
+        }
+      }
+    },
+    [t]
+  );
 
   const loadMemoryConfig = useCallback(async () => {
     if (!currentBotId) {
@@ -1391,9 +1555,50 @@ const BaseConfig: React.FC<ChatProps> = ({
     }
   }, [currentBotId, loadMemoryItems, t]);
 
-  const filteredDebugSessions = useMemo(
-    () => filterDebugSessions(debugSessions, debugHistorySearchQuery),
-    [debugHistorySearchQuery, debugSessions]
+  // 搜索走服务端，覆盖全部调试会话而不只是侧边栏已加载的部分
+  const runDebugSearch = useMemo(
+    () =>
+      debounce(async (botId: number, keyword: string) => {
+        const requestId = ++debugSearchRequestRef.current;
+        try {
+          const result = await getAgentDebugSessions(botId, {
+            keyword,
+            limit: 50,
+          });
+          if (requestId === debugSearchRequestRef.current) {
+            setDebugSearchResults(result || []);
+          }
+        } catch (err) {
+          if (requestId === debugSearchRequestRef.current) {
+            setDebugSearchResults([]);
+          }
+        } finally {
+          if (requestId === debugSearchRequestRef.current) {
+            setDebugSearchLoading(false);
+          }
+        }
+      }, 300),
+    []
+  );
+
+  useEffect(() => {
+    const keyword = debugHistorySearchQuery.trim();
+    if (!keyword || !currentBotId) {
+      runDebugSearch.cancel();
+      debugSearchRequestRef.current += 1;
+      setDebugSearchResults([]);
+      setDebugSearchLoading(false);
+      return;
+    }
+    setDebugSearchLoading(true);
+    runDebugSearch(currentBotId, keyword);
+  }, [currentBotId, debugHistorySearchQuery, runDebugSearch]);
+
+  useEffect(() => () => runDebugSearch.cancel(), [runDebugSearch]);
+
+  const debugSessionGroups = useMemo(
+    () => groupDebugSessions(debugSessions),
+    [debugSessions]
   );
 
   useEffect(() => {
@@ -1424,6 +1629,7 @@ const BaseConfig: React.FC<ChatProps> = ({
       if (scope !== debugSessionScopeRef.current) return null;
       if (activeDebugSessionIdRef.current) return null;
       if (!currentBotId) return null;
+      if (failedDebugSessionScopeRef.current === scope) return null;
       if (creatingDebugSessionRef.current?.scope === scope) {
         return creatingDebugSessionRef.current.promise;
       }
@@ -1448,7 +1654,18 @@ const BaseConfig: React.FC<ChatProps> = ({
           ]);
           return session;
         })
-        .catch(() => null)
+        .catch((err: { message?: string } | undefined) => {
+          if (scope === debugSessionScopeRef.current) {
+            failedDebugSessionScopeRef.current = scope;
+          }
+          console.error('Failed to create agent debug session', err);
+          message.warning(
+            `${t('configBase.debugHistorySaveFailed')}${
+              err?.message ? `：${err.message}` : ''
+            }`
+          );
+          return null;
+        })
         .finally(() => {
           if (creatingDebugSessionRef.current?.promise === creation) {
             creatingDebugSessionRef.current = null;
@@ -1465,6 +1682,7 @@ const BaseConfig: React.FC<ChatProps> = ({
   );
 
   const handleStartDebugSession = useCallback(() => {
+    closeChatPageRecord();
     debugSessionScopeRef.current += 1;
     debugMessageRevisionRef.current += 1;
     setActiveWorkbenchView('chat');
@@ -1476,10 +1694,13 @@ const BaseConfig: React.FC<ChatProps> = ({
     activeDebugSessionIdRef.current = '';
     setActiveDebugSessionId('');
     setDebugSessionKey(key => key + 1);
-  }, []);
+  }, [closeChatPageRecord]);
+
+  handleStartDebugSessionRef.current = handleStartDebugSession;
 
   const handleSelectDebugSession = useCallback(
     async (session: AgentDebugSession) => {
+      closeChatPageRecord();
       debugSessionScopeRef.current += 1;
       const scope = debugSessionScopeRef.current;
       const revision = debugMessageRevisionRef.current;
@@ -1510,15 +1731,24 @@ const BaseConfig: React.FC<ChatProps> = ({
         }
       }
     },
-    []
+    [closeChatPageRecord]
   );
 
   const persistDebugMessages = useMemo(
     () =>
       debounce((sessionId: string, messages: MessageListType[]) => {
-        saveAgentDebugMessages({ sessionId, messages }).catch(() => {});
+        saveAgentDebugMessages({ sessionId, messages }).catch(
+          (err: { message?: string } | undefined) => {
+            console.error('Failed to save agent debug messages', err);
+            message.warning(
+              `${t('configBase.debugHistorySaveFailed')}${
+                err?.message ? `：${err.message}` : ''
+              }`
+            );
+          }
+        );
       }, 800),
-    []
+    [t]
   );
 
   useEffect(() => {
@@ -1940,6 +2170,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                 skills={skills}
                 tools={tools}
                 workflows={workflows}
+                agents={agents}
+                autoTeam={autoTeam}
+                deepThinking={deepThinking}
+                builtinTools={builtinTools}
                 findModelOptionByUniqueKey={findModelOptionByUniqueKey}
                 personalityConfig={
                   personalityData.enablePersonality
@@ -2004,6 +2238,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                 skills={skills}
                 tools={tools}
                 workflows={workflows}
+                agents={agents}
+                autoTeam={autoTeam}
+                deepThinking={deepThinking}
+                builtinTools={builtinTools}
                 findModelOptionByUniqueKey={findModelOptionByUniqueKey}
                 personalityConfig={
                   personalityData.enablePersonality
@@ -2041,6 +2279,10 @@ const BaseConfig: React.FC<ChatProps> = ({
         skills={skills}
         tools={tools}
         workflows={workflows}
+        agents={agents}
+        autoTeam={autoTeam}
+        deepThinking={deepThinking}
+        builtinTools={builtinTools}
         findModelOptionByUniqueKey={findModelOptionByUniqueKey}
         personalityConfig={
           personalityData.enablePersonality
@@ -2052,7 +2294,31 @@ const BaseConfig: React.FC<ChatProps> = ({
     );
   };
 
+  // 深度思考开关：随智能体配置保存，正式对话、调试和被其他智能体调用时都生效
+  const renderDeepThinkingSwitch = () => (
+    <Tooltip title={t('configBase.deepThinkingTip')}>
+      <label
+        className="flex items-center gap-1.5 shrink-0 cursor-pointer select-none text-xs text-[#4b5563]"
+        data-testid="deep-thinking"
+      >
+        <Switch
+          size="small"
+          checked={deepThinking}
+          onChange={setDeepThinking}
+        />
+        {t('configBase.deepThinking')}
+      </label>
+    </Tooltip>
+  );
+
   const renderChatModelSelector = () => (
+    <div className="flex items-center gap-3">
+      {renderDeepThinkingSwitch()}
+      {renderChatModelSelect()}
+    </div>
+  );
+
+  const renderChatModelSelect = () => (
     <Select
       value={model}
       onChange={handleModelChange}
@@ -2083,6 +2349,44 @@ const BaseConfig: React.FC<ChatProps> = ({
         </Option>
       ))}
     </Select>
+  );
+
+  const isViewingChatPageRecord =
+    activeWorkbenchView === 'chat' && activeChatPageRecordId !== null;
+
+  const renderChatPageRecord = () => (
+    <div className={styles.workbenchChatWorkspace}>
+      <div className={styles.workbenchChatPanel}>
+        {chatPageMessagesLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <Spin />
+          </div>
+        ) : chatPageMessages.length === 0 ? (
+          <div className={styles.workbenchEmptyState}>
+            {t('configBase.chatPageRecordEmpty')}
+          </div>
+        ) : (
+          <ReadonlyMessageList
+            messageList={chatPageMessages}
+            botInfo={baseinfo}
+            coverUrl={coverUrl || ''}
+            inputExample={[]}
+            isLoading={false}
+            isCompleted={true}
+            stopAnswer={() => {}}
+            showHeaderAndRecommend={false}
+          />
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-3 pt-3">
+        <span className="text-xs text-[#9ca3af]">
+          {t('configBase.chatPageRecordReadonly')}
+        </span>
+        <Button onClick={handleStartDebugSession}>
+          {t('configBase.backToDebug')}
+        </Button>
+      </div>
+    </div>
   );
 
   const renderChatWorkspace = () => (
@@ -2127,7 +2431,14 @@ const BaseConfig: React.FC<ChatProps> = ({
       tools={tools}
       setTools={setTools}
       workflows={workflows}
+      agents={agents}
+      autoTeam={autoTeam}
       setWorkflows={setWorkflows}
+      setAgents={setAgents}
+      setAutoTeam={setAutoTeam}
+      builtinTools={builtinTools}
+      setBuiltinTools={setBuiltinTools}
+      currentBotId={Number(searchParams.get('botId')) || undefined}
       mcpServerUrls={mcpServerUrls}
       setMcpServerUrls={setMcpServerUrls}
       skills={skills}
@@ -2538,27 +2849,27 @@ const BaseConfig: React.FC<ChatProps> = ({
         placeholder={t('configBase.searchDebugHistory') || '搜索调试历史'}
       />
       <div className={styles.workbenchSearchResults}>
-        {debugHistoryLoading && (
-          <div className={styles.workbenchEmptyState}>
-            {t('configBase.loading') || '加载中...'}
-          </div>
-        )}
-        {!debugHistoryLoading && !debugHistorySearchQuery.trim() && (
+        {!debugHistorySearchQuery.trim() && (
           <div className={styles.workbenchEmptyState}>
             {t('configBase.searchDebugHistoryTip') ||
               '输入关键词搜索当前智能体的调试历史'}
           </div>
         )}
-        {!debugHistoryLoading &&
-          debugHistorySearchQuery.trim() &&
-          filteredDebugSessions.length === 0 && (
+        {debugHistorySearchQuery.trim() && debugSearchLoading && (
+          <div className={styles.workbenchEmptyState}>
+            {t('configBase.loading') || '加载中...'}
+          </div>
+        )}
+        {debugHistorySearchQuery.trim() &&
+          !debugSearchLoading &&
+          debugSearchResults.length === 0 && (
             <div className={styles.workbenchEmptyState}>
               {t('configBase.noDebugHistory') || '暂无调试历史'}
             </div>
           )}
-        {!debugHistoryLoading &&
-          debugHistorySearchQuery.trim() &&
-          filteredDebugSessions.map(session => (
+        {debugHistorySearchQuery.trim() &&
+          !debugSearchLoading &&
+          debugSearchResults.map(session => (
             <button
               type="button"
               key={session.id}
@@ -2566,7 +2877,9 @@ const BaseConfig: React.FC<ChatProps> = ({
               onClick={() => handleSelectDebugSession(session)}
             >
               <span>{buildDebugSessionTitle(session)}</span>
-              <small>{session.updatedAt || session.createdAt || ''}</small>
+              <small>
+                {formatDebugSessionTime(session.updatedAt || session.createdAt)}
+              </small>
             </button>
           ))}
       </div>
@@ -2617,7 +2930,7 @@ const BaseConfig: React.FC<ChatProps> = ({
             <button
               type="button"
               className={`${styles.workbenchNavItem} ${
-                activeWorkbenchView === 'chat'
+                activeWorkbenchView === 'chat' && !isViewingChatPageRecord
                   ? styles.workbenchNavItemActive
                   : ''
               }`}
@@ -2667,7 +2980,7 @@ const BaseConfig: React.FC<ChatProps> = ({
 
           <div className={styles.workbenchHistory}>
             <div className={styles.workbenchSidebarLabel}>
-              {t('configBase.debugHistory') || '对话历史'}
+              {t('configBase.debugHistory') || '调试历史'}
             </div>
             <div className={styles.workbenchHistoryList}>
               {debugHistoryLoading && (
@@ -2680,42 +2993,130 @@ const BaseConfig: React.FC<ChatProps> = ({
                   {t('configBase.noDebugHistory') || '暂无调试历史'}
                 </div>
               )}
-              {debugSessions.map(session => (
+              {debugSessionGroups.map(group => (
+                <React.Fragment key={group.key}>
+                  <div className={styles.workbenchHistoryGroupLabel}>
+                    {t(`configBase.debugHistoryGroup.${group.key}`)}
+                  </div>
+                  {group.sessions.map(session => (
+                    <div
+                      key={session.id}
+                      className={`${styles.workbenchHistoryItem} ${
+                        styles.workbenchHistoryItemRow
+                      } ${
+                        activeDebugSessionId === session.id
+                          ? styles.workbenchHistoryItemActive
+                          : ''
+                      }`}
+                      role="button"
+                      tabIndex={0}
+                      title={buildDebugSessionTitle(session)}
+                      onClick={() => handleSelectDebugSession(session)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter') {
+                          handleSelectDebugSession(session);
+                        }
+                      }}
+                    >
+                      <span>{buildDebugSessionTitle(session)}</span>
+                      <small>
+                        {formatDebugSessionGroupTime(
+                          session.updatedAt || session.createdAt,
+                          group.key
+                        )}
+                      </small>
+                      <Popconfirm
+                        title={t('configBase.deleteDebugSessionConfirm')}
+                        okText={t('common.confirm') || '确定'}
+                        cancelText={t('common.cancel') || '取消'}
+                        onConfirm={event => {
+                          event?.stopPropagation();
+                          handleDeleteDebugSession(session);
+                        }}
+                        onCancel={event => event?.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className={styles.workbenchHistoryDelete}
+                          aria-label={t('configBase.deleteDebugSession')}
+                          onClick={event => event.stopPropagation()}
+                        >
+                          <DeleteOutlined />
+                        </button>
+                      </Popconfirm>
+                    </div>
+                  ))}
+                </React.Fragment>
+              ))}
+              {debugHasMore && (
                 <button
                   type="button"
-                  key={session.id}
-                  className={`${styles.workbenchHistoryItem} ${
-                    activeDebugSessionId === session.id
-                      ? styles.workbenchHistoryItemActive
-                      : ''
-                  }`}
-                  onClick={() => handleSelectDebugSession(session)}
+                  className={styles.workbenchHistoryLoadMore}
+                  disabled={debugLoadingMore}
+                  onClick={loadMoreDebugSessions}
                 >
-                  <span>{buildDebugSessionTitle(session)}</span>
-                  <small>{session.updatedAt || session.createdAt || ''}</small>
+                  {debugLoadingMore
+                    ? t('configBase.loading') || '加载中...'
+                    : t('configBase.loadMore')}
                 </button>
-              ))}
+              )}
             </div>
           </div>
+          {chatPageRecords.length > 0 && (
+            <div
+              className={`${styles.workbenchHistory} ${styles.workbenchHistoryCompact}`}
+            >
+              <div className={styles.workbenchSidebarLabel}>
+                {t('configBase.chatPageHistory')}
+              </div>
+              <div className={styles.workbenchHistoryList}>
+                {chatPageRecords.map(record => (
+                  <button
+                    type="button"
+                    key={record.id}
+                    className={`${styles.workbenchHistoryItem} ${
+                      activeChatPageRecordId === record.id
+                        ? styles.workbenchHistoryItemActive
+                        : ''
+                    }`}
+                    onClick={() => handleSelectChatPageRecord(record)}
+                  >
+                    <span>{t('configBase.chatPageRecordTitle')}</span>
+                    <small>
+                      {formatDebugSessionTime(
+                        record.updateTime || record.createTime
+                      )}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
 
         <main className={styles.workbenchMain}>
           <header className={styles.workbenchMainHeader}>
             <div>
               <div className={styles.workbenchTitleRow}>
-                <h1>{workbenchTitleMap[activeWorkbenchView]}</h1>
-                {activeWorkbenchView === 'chat' && (
+                <h1>
+                  {isViewingChatPageRecord
+                    ? t('configBase.chatPageRecordTitle')
+                    : workbenchTitleMap[activeWorkbenchView]}
+                </h1>
+                {activeWorkbenchView === 'chat' && !isViewingChatPageRecord && (
                   <span className={styles.workbenchStatusPill}>
                     {t('configBase.currentConfigValid') || '当前配置有效'}
                   </span>
                 )}
               </div>
               <p>
-                {activeWorkbenchView === 'chat'
-                  ? t('configBase.debugHistoryPersistTip') ||
-                    '使用当前智能体配置开始调试，会保存到当前智能体的服务端调试历史'
-                  : t('configBase.editAgentConfigTip') ||
-                    '编辑当前智能体配置，保存后即可用于新调试会话'}
+                {isViewingChatPageRecord
+                  ? t('configBase.chatPageRecordTip')
+                  : activeWorkbenchView === 'chat'
+                    ? t('configBase.debugHistoryPersistTip') ||
+                      '使用当前智能体配置开始调试，会保存到当前智能体的服务端调试历史'
+                    : t('configBase.editAgentConfigTip') ||
+                      '编辑当前智能体配置，保存后即可用于新调试会话'}
               </p>
             </div>
             {showModelPk !== 0 && !showTipPk && (
@@ -2736,9 +3137,11 @@ const BaseConfig: React.FC<ChatProps> = ({
               activeWorkbenchView === 'chat' ? styles.workbenchMainBodyChat : ''
             }`}
           >
-            {activeWorkbenchView === 'chat'
-              ? renderChatWorkspace()
-              : renderConfigWorkspace()}
+            {isViewingChatPageRecord
+              ? renderChatPageRecord()
+              : activeWorkbenchView === 'chat'
+                ? renderChatWorkspace()
+                : renderConfigWorkspace()}
           </section>
         </main>
 
@@ -2832,6 +3235,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                       skills: normalizeSkills(skills),
                       tools: normalizeTools(tools),
                       workflows: normalizeWorkflows(workflows),
+                      agents: normalizeAgents(agents),
+                      autoTeam: autoTeam ? 1 : 0,
+                      deepThinking: deepThinking ? 1 : 0,
+                      builtinTools,
                       prologue: prologue,
                       ...getModelConfig(model),
                       prompt: prompt,
@@ -2886,6 +3293,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                       skills: normalizeSkills(skills),
                       tools: normalizeTools(tools),
                       workflows: normalizeWorkflows(workflows),
+                      agents: normalizeAgents(agents),
+                      autoTeam: autoTeam ? 1 : 0,
+                      deepThinking: deepThinking ? 1 : 0,
+                      builtinTools,
                       prologue: prologue,
                       ...getModelConfig(model),
                       prompt: prompt,
@@ -2965,6 +3376,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                     skills: normalizeSkills(skills),
                     tools: normalizeTools(tools),
                     workflows: normalizeWorkflows(workflows),
+                    agents: normalizeAgents(agents),
+                    autoTeam: autoTeam ? 1 : 0,
+                    deepThinking: deepThinking ? 1 : 0,
+                    builtinTools,
                     prologue: prologue,
                     ...getModelConfig(model),
                     prompt: prompt,
@@ -3016,6 +3431,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                     skills: normalizeSkills(skills),
                     tools: normalizeTools(tools),
                     workflows: normalizeWorkflows(workflows),
+                    agents: normalizeAgents(agents),
+                    autoTeam: autoTeam ? 1 : 0,
+                    deepThinking: deepThinking ? 1 : 0,
+                    builtinTools,
                     prologue: prologue,
                     ...getModelConfig(model),
                     prompt: prompt,
@@ -3307,6 +3726,9 @@ const BaseConfig: React.FC<ChatProps> = ({
                               </Option>
                             ))}
                           </Select>
+                          <div className="mt-2">
+                            {renderDeepThinkingSwitch()}
+                          </div>
                         </>
                       ),
                     },
@@ -3336,7 +3758,16 @@ const BaseConfig: React.FC<ChatProps> = ({
                           tools={tools}
                           setTools={setTools}
                           workflows={workflows}
+                          agents={agents}
+                          autoTeam={autoTeam}
                           setWorkflows={setWorkflows}
+                          setAgents={setAgents}
+                          setAutoTeam={setAutoTeam}
+                          builtinTools={builtinTools}
+                          setBuiltinTools={setBuiltinTools}
+                          currentBotId={
+                            Number(searchParams.get('botId')) || undefined
+                          }
                           mcpServerUrls={mcpServerUrls}
                           setMcpServerUrls={setMcpServerUrls}
                           skills={skills}
@@ -3474,6 +3905,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                       skills={skills}
                       tools={tools}
                       workflows={workflows}
+                      agents={agents}
+                      autoTeam={autoTeam}
+                      deepThinking={deepThinking}
+                      builtinTools={builtinTools}
                       findModelOptionByUniqueKey={findModelOptionByUniqueKey}
                       personalityConfig={
                         personalityData.enablePersonality
@@ -3522,6 +3957,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                           skills={skills}
                           tools={tools}
                           workflows={workflows}
+                          agents={agents}
+                          autoTeam={autoTeam}
+                          deepThinking={deepThinking}
+                          builtinTools={builtinTools}
                           findModelOptionByUniqueKey={
                             findModelOptionByUniqueKey
                           }
@@ -3600,6 +4039,10 @@ const BaseConfig: React.FC<ChatProps> = ({
                         skills={skills}
                         tools={tools}
                         workflows={workflows}
+                        agents={agents}
+                        autoTeam={autoTeam}
+                        deepThinking={deepThinking}
+                        builtinTools={builtinTools}
                         findModelOptionByUniqueKey={findModelOptionByUniqueKey}
                         personalityConfig={
                           personalityData.enablePersonality

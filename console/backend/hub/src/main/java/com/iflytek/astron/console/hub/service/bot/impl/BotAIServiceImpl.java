@@ -17,6 +17,8 @@ import com.iflytek.astron.console.hub.mapper.AiPromptTemplateMapper;
 import com.iflytek.astron.console.hub.service.bot.BotAIService;
 import com.iflytek.astron.console.hub.util.BotAIServiceClient;
 import com.iflytek.astron.console.hub.util.ImageUtil;
+import com.iflytek.astron.console.toolkit.entity.platform.AiCapability;
+import com.iflytek.astron.console.toolkit.service.platform.PlatformAccountService;
 import com.iflytek.astron.console.toolkit.util.RedisUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -40,9 +42,14 @@ public class BotAIServiceImpl implements BotAIService {
 
     private static final float IMAGE_COMPRESS_SCALE = 0.2f;
     private static final int BASE_IMAGE_SIZE = 1024;
+    private static final String VOLC_AVATAR_IMAGE_SIZE = "2048x2048";
+    private static final float VOLC_IMAGE_COMPRESS_SCALE = 0.1f;
 
     @Autowired
     private S3ClientUtil s3ClientUtil;
+
+    @Autowired
+    private PlatformAccountService platformAccountService;
 
     @Autowired
     private BotAIServiceClient aiServiceClient;
@@ -204,45 +211,11 @@ public class BotAIServiceImpl implements BotAIService {
         InputStream compressImageInput = null;
 
         try {
-            JSONObject response = aiServiceClient.generateImage(uid, prompt, BASE_IMAGE_SIZE);
-
-            // Check response structure
-            JSONObject header = response.getJSONObject("header");
-            if (header == null) {
-                return null;
-            }
-
-            int code = header.getIntValue("code");
-            String sid = header.getString("sid");
-            String message = header.getString("message");
-
-            if (code != 0) {
-                log.error("User [{}] AI avatar generation failed, response code: {}, message: {}, sid: {}", uid, code, message, sid);
-                return null;
-            }
-
-            // Parse payload
-            JSONObject payload = response.getJSONObject("payload");
-            if (payload == null) {
-                return null;
-            }
-
-            JSONObject choices = payload.getJSONObject("choices");
-            if (choices == null) {
-                return null;
-            }
-
-            JSONArray textArray = choices.getJSONArray("text");
-            if (textArray == null || textArray.isEmpty()) {
-                return null;
-            }
-
-            JSONObject textItem = textArray.getJSONObject(0);
-            if (textItem == null) {
-                return null;
-            }
-
-            String base64Image = textItem.getString("content");
+            boolean useVolcengine = platformAccountService.routesToVolcengine(AiCapability.AVATAR_IMAGE);
+            log.info("User [{}] AI avatar generation provider: {}", uid, useVolcengine ? "volcengine" : "iflytek");
+            String base64Image = useVolcengine
+                    ? aiServiceClient.generateImageWithVolcengine(uid, prompt, VOLC_AVATAR_IMAGE_SIZE)
+                    : extractSparkImageBase64(uid, aiServiceClient.generateImage(uid, prompt, BASE_IMAGE_SIZE));
             if (StrUtil.isBlank(base64Image)) {
                 return null;
             }
@@ -254,9 +227,10 @@ public class BotAIServiceImpl implements BotAIService {
                 return null;
             }
 
-            // Convert and compress image
+            // Convert and compress image. Seedream returns 2048px, so scale it to the same ~200px as Spark.
             imageInput = ImageUtil.base64ToImageInputStream(base64Image);
-            compressImageInput = ImageUtil.compressImage(imageInput, IMAGE_COMPRESS_SCALE);
+            compressImageInput = ImageUtil.compressImage(
+                    imageInput, useVolcengine ? VOLC_IMAGE_COMPRESS_SCALE : IMAGE_COMPRESS_SCALE);
 
             // Calculate compressed dimensions
             int compressedWidth = (int) (BASE_IMAGE_SIZE * IMAGE_COMPRESS_SCALE);
@@ -281,6 +255,28 @@ public class BotAIServiceImpl implements BotAIService {
             IoUtil.close(imageInput);
             IoUtil.close(compressImageInput);
         }
+    }
+
+    /** Extracts the base64 image from a Spark image generation response, or null when absent. */
+    private String extractSparkImageBase64(String uid, JSONObject response) {
+        JSONObject header = response == null ? null : response.getJSONObject("header");
+        if (header == null) {
+            return null;
+        }
+        int code = header.getIntValue("code");
+        if (code != 0) {
+            log.error("User [{}] AI avatar generation failed, response code: {}, message: {}, sid: {}",
+                    uid, code, header.getString("message"), header.getString("sid"));
+            return null;
+        }
+        JSONObject payload = response.getJSONObject("payload");
+        JSONObject choices = payload == null ? null : payload.getJSONObject("choices");
+        JSONArray textArray = choices == null ? null : choices.getJSONArray("text");
+        if (textArray == null || textArray.isEmpty()) {
+            return null;
+        }
+        JSONObject textItem = textArray.getJSONObject(0);
+        return textItem == null ? null : textItem.getString("content");
     }
 
     @Override
