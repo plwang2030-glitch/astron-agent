@@ -270,11 +270,16 @@ public class StrategyService {
             int trials = trialCount(uid) + 1;
             double dsr = Statistics.deflatedSharpe(e.outOfSample().dailyReturns(), trials,
                     historicalSharpeSpread(uid));
+            List<String> reasons = gate(b, e, MIN_IMPROVEMENT, MIN_Z, dsr, MIN_DEFLATED, trials);
             out.put("baseline", b.toJson());
             out.put("significanceZ", Indicators.round(z(b, e), 2));
             out.put("deflatedSharpe", Indicators.round(dsr, 3));
             out.put("trials", trials);
-            out.put("gateCheck", gate(b, e, MIN_IMPROVEMENT, MIN_Z, dsr, MIN_DEFLATED, trials));
+            out.put("gateCheck", reasons);
+            // Measuring a candidate against the out-of-sample data is a trial whoever asked for it,
+            // including a dry run. Not counting it would understate how hard the system has searched
+            // and quietly lower the bar for everything measured afterwards.
+            recordTrial(uid, p, base, v.getVersion(), b, e, dsr, trials, reasons.isEmpty(), SearchTrial.BACKTEST);
         }
         return out;
     }

@@ -248,6 +248,53 @@ public class AShareReviewService {
         return report;
     }
 
+    /**
+     * Runs one question through the user's review agent and returns its answer, with no chat and no
+     * report. Used by the rule evolution loop, which needs the model as a mutation operator rather than
+     * as a conversation partner.
+     *
+     * @return the answer, or {@code null} when no usable agent is configured
+     */
+    public String askReviewAgent(String uid, String prompt, Duration budget) {
+        PaperAccount account = paperTradingService.account(uid);
+        Integer botId = account.getReviewBotId();
+        if (botId == null) {
+            log.info("Agent question skipped: no review agent, uid={}", uid);
+            return null;
+        }
+        ChatToolContext context = new ChatToolContext(uid);
+        context.setBotId(botId);
+        context.setLongRunning(true);
+        context.setDeadlineMillis(System.currentTimeMillis() + budget.toMillis());
+        try {
+            ChatBotBase base = chatBotDataService.findById(botId).orElse(null);
+            UserInfo user = userInfoDataService.findByUid(uid).orElse(null);
+            if (base == null || user == null || Objects.equals(base.getIsDelete(), 1)) {
+                return null;
+            }
+            List<PreparedSubAgent> prepared = subAgentPreparer.prepareForUser("[{\"botId\":" + base.getId() + "}]",
+                    base.getUid(), base.getSpaceId(), user, base.getSpaceId(), !Objects.equals(base.getUid(), uid));
+            List<ToolCallback> tools = prepared.isEmpty() ? List.of() : subAgentToolFactory.build(prepared, context);
+            if (tools.isEmpty()) {
+                return null;
+            }
+            String answer = tools.get(0).call(new JSONObject().fluentPut("query", prompt).toJSONString());
+            if (StringUtils.isBlank(answer) || answer.startsWith("调用智能体") || answer.startsWith("剩余时间不足")
+                    || answer.startsWith("对话已结束")) {
+                log.info("Agent question returned nothing usable, uid={}, answer={}", uid,
+                        StringUtils.abbreviate(answer, 120));
+                return null;
+            }
+            return answer;
+        } catch (RuntimeException e) {
+            log.warn("Agent question failed, uid={}, errorType={}, msg={}", uid, e.getClass().getSimpleName(),
+                    e.getMessage());
+            return null;
+        } finally {
+            context.cancel();
+        }
+    }
+
     private void execute(TradingReviewReport report, String lockToken) {
         String uid = report.getUid();
         long start = System.currentTimeMillis();

@@ -48,6 +48,7 @@ public class AShareDailyJob {
     private final PaperTradingService paperTradingService;
     private final AShareReviewService reviewService;
     private final AutoEvolutionService autoEvolutionService;
+    private final RuleEvolutionService ruleEvolutionService;
     private final UniverseService universeService;
     private final DecisionSignalService signalService;
     private final RedisUtil redisUtil;
@@ -194,6 +195,14 @@ public class AShareDailyJob {
                 String month = TradingClock.duePeriod(today, calendar, List.of(), false);
                 if (evolve && month != null) {
                     autoEvolutionService.monthlyRollbackCheck(uid);
+                    // Inventing rules costs statistical power (every attempt raises the deflation bar),
+                    // so it runs monthly while the parameter search runs weekly.
+                    try {
+                        ruleEvolutionService.evolve(uid, 2, "每月定时");
+                    } catch (RuntimeException e) {
+                        log.warn("Monthly rule evolution failed, uid={}, errorType={}, msg={}", uid,
+                                e.getClass().getSimpleName(), e.getMessage());
+                    }
                 }
                 List<ScheduledReview> due = new ArrayList<>();
                 addDue(due, uid, account.getWeeklyReview(), TradingReviewReport.WEEKLY, true, today, calendar);

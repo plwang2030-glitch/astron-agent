@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS `ashare_search_trial` (
   `deflated_sharpe` double DEFAULT NULL COMMENT 'Probability the true Sharpe is above zero',
   `trials_at_time` int DEFAULT NULL COMMENT 'Cumulative trial count used for the deflation',
   `passed` tinyint NOT NULL DEFAULT 0,
-  `origin` varchar(16) NOT NULL DEFAULT 'SEARCH' COMMENT 'SEARCH / PROPOSAL',
+  `origin` varchar(16) NOT NULL DEFAULT 'SEARCH' COMMENT 'SEARCH / PROPOSAL / BACKTEST',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_ashare_trial_uid` (`uid`,`create_time`),

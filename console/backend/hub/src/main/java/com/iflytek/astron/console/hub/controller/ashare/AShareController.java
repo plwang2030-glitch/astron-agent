@@ -18,6 +18,7 @@ import com.iflytek.astron.console.hub.service.ashare.PaperTradingService;
 import com.iflytek.astron.console.hub.service.ashare.StrategyParams;
 import com.iflytek.astron.console.hub.service.ashare.DecisionSignalService;
 import com.iflytek.astron.console.hub.service.ashare.MarketPackService;
+import com.iflytek.astron.console.hub.service.ashare.RuleEvolutionService;
 import com.iflytek.astron.console.hub.service.ashare.StrategyService;
 import com.iflytek.astron.console.hub.service.ashare.UniverseService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -54,6 +55,7 @@ public class AShareController {
     private final UniverseService universeService;
     private final DecisionSignalService signalService;
     private final MarketPackService packService;
+    private final RuleEvolutionService ruleEvolutionService;
 
     @GetMapping("/overview")
     @Operation(summary = "Account value, positions, pending orders and performance")
@@ -140,6 +142,20 @@ public class AShareController {
             }
             return new JSONObject().fluentPut("current", strategyService.current(uid)).fluentPut("history", history);
         });
+    }
+
+    @GetMapping("/strategy/rules")
+    @Operation(summary = "The library of invented rules and what each one scored")
+    public ApiResult<JSONObject> ruleLibrary() {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> ruleEvolutionService.library(uid));
+    }
+
+    @PostMapping("/strategy/rules/evolve")
+    @Operation(summary = "Invent new rules, backtest them through the gate and record what they scored")
+    public ApiResult<JSONObject> evolveRules(@RequestBody(required = false) RoundsForm form) {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> ruleEvolutionService.evolve(uid, form == null ? null : form.getRounds(), "页面手动"));
     }
 
     @PostMapping("/strategy/backtest")
@@ -339,6 +355,12 @@ public class AShareController {
         private Boolean autoTrade;
         private Integer reviewBotId;
         private Boolean watchlistAutoTrade;
+    }
+
+    @Data
+    public static class RoundsForm {
+        /** How many invent-and-measure rounds; each is one model call. */
+        private Integer rounds;
     }
 
     @Data

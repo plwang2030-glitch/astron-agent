@@ -17,6 +17,8 @@ public class SearchTrial {
 
     public static final String SEARCH = "SEARCH";
     public static final String PROPOSAL = "PROPOSAL";
+    /** A dry run or a rule being measured; still a look at the out-of-sample data. */
+    public static final String BACKTEST = "BACKTEST";
 
     @TableId(type = IdType.AUTO)
     private Long id;
