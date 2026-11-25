@@ -267,6 +267,7 @@ public class PaperTradingService {
                         + "成交；开盘" + (buy ? "涨停" : "跌停") + "或停牌则不成交，当日未成交自动失效";
             }
             PaperOrder saved = orderMapper.selectById(order.getId());
+            notifyOrder(uid, saved);
             return new JSONObject()
                     .fluentPut("orderId", order.getId())
                     .fluentPut("status", saved.getStatus())
@@ -595,6 +596,7 @@ public class PaperTradingService {
                             StringUtils.defaultIfBlank(name, s.name()), s.bars(), session, now);
                     if (d.kind() != FillDecision.Kind.WAIT) {
                         applyLive(uid, o, d, session, session.atTime(OPEN));
+                        notifyOrder(uid, orderMapper.selectById(o.getId()));
                         processed++;
                         continue;
                     }
@@ -611,6 +613,7 @@ public class PaperTradingService {
                                 StringUtils.defaultIfBlank(name, q.name()), q.price(), q.prevClose(), q.tradedOn(today));
                         if (d.kind() != FillDecision.Kind.WAIT) {
                             applyLive(uid, o, d, today, now);
+                            notifyOrder(uid, orderMapper.selectById(o.getId()));
                             processed++;
                             continue;
                         }
@@ -620,6 +623,7 @@ public class PaperTradingService {
                 if (session.isBefore(today) || !now.toLocalTime().isBefore(TradingClock.CLOSE)) {
                     reject(uid, o, session + " 收盘未成交，订单已失效"
                             + (o.getLimitPrice() == null ? "" : "（限价 " + o.getLimitPrice() + "）"));
+                    notifyOrder(uid, orderMapper.selectById(o.getId()));
                     processed++;
                 }
             }
@@ -934,6 +938,8 @@ public class PaperTradingService {
             } catch (RuntimeException e) {
                 log.warn("Risk exit failed, uid={}, code={}, errorType={}, msg={}", uid, pos.getCode(),
                         e.getClass().getSimpleName(), e.getMessage());
+                notifyFailure(uid, "A股模拟盘：" + reason + "下单失败 "
+                        + StringUtils.defaultIfBlank(pos.getName(), pos.getCode()), e.getMessage());
             }
         }
         return placed;
@@ -1036,6 +1042,8 @@ public class PaperTradingService {
             } catch (RuntimeException e) {
                 log.warn("Strategy exit skipped, uid={}, code={}, errorType={}, msg={}", uid, pos.getCode(),
                         e.getClass().getSimpleName(), e.getMessage());
+                notifyFailure(uid, "A股模拟盘：尾盘离场下单失败 "
+                        + StringUtils.defaultIfBlank(pos.getName(), pos.getCode()), e.getMessage());
             }
         }
         result.put("exits", exits);
@@ -1143,6 +1151,8 @@ public class PaperTradingService {
                         e.getClass().getSimpleName(), e.getMessage());
                 if (watched) {
                     watchNotes.add(label + " 未买入：" + e.getMessage());
+                } else {
+                    notifyFailure(uid, "A股模拟盘：策略买入下单失败 " + label, e.getMessage());
                 }
             }
         }
@@ -1175,6 +1185,112 @@ public class PaperTradingService {
             return "持仓已达上限 " + maxPositions + " 只";
         }
         return null;
+    }
+
+    /**
+     * Tells the user about an order that reached a final state, with the price, size, fees, realized
+     * P&L and the rule that caused it. Automatic trades move real value in the account, so they must
+     * not happen silently. Positions synced from a real broker are skipped (the user did those). A
+     * failure to notify never affects the trade.
+     */
+    private void notifyOrder(String uid, PaperOrder o) {
+        if (o == null || SOURCE_IMPORT.equals(o.getSource())) {
+            return;
+        }
+        if (!PaperOrder.FILLED.equals(o.getStatus()) && !PaperOrder.REJECTED.equals(o.getStatus())) {
+            return;
+        }
+        try {
+            SendNotificationRequest request = new SendNotificationRequest();
+            request.setType(NotificationType.PERSONAL);
+            request.setTitle(StringUtils.abbreviate(orderTitle(o), 120));
+            request.setBody(StringUtils.abbreviate(orderBody(o), 480));
+            request.setPayload(new JSONObject()
+                    .fluentPut("outlink", AShareReviewService.PAGE_PATH)
+                    .fluentPut("orderId", o.getId())
+                    .toJSONString());
+            request.setReceiverUids(List.of(uid));
+            notificationService.sendNotification(request);
+            log.info("Order notification sent, uid={}, orderId={}, status={}, title={}", uid, o.getId(),
+                    o.getStatus(), orderTitle(o));
+        } catch (Exception e) {
+            log.warn("Order notification failed, uid={}, orderId={}, errorType={}, msg={}", uid, o.getId(),
+                    e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /** Title of an order notification: what happened, to which stock. */
+    static String orderTitle(PaperOrder o) {
+        boolean filled = PaperOrder.FILLED.equals(o.getStatus());
+        String stock = StringUtils.defaultIfBlank(o.getName(), o.getCode()) + " " + o.getCode();
+        String what = filled ? fillLabel(o) : (PaperOrder.BUY.equals(o.getSide()) ? "买入" : "卖出") + "未成交";
+        return "A股模拟盘：" + what + " " + stock;
+    }
+
+    /** Body of an order notification: size, price, fees, realized P&L and the rule behind it. */
+    static String orderBody(PaperOrder o) {
+        StringBuilder body = new StringBuilder();
+        if (PaperOrder.FILLED.equals(o.getStatus())) {
+            body.append(o.getQty()).append(" 股 @").append(o.getFillPrice()).append(" 元");
+            if (o.getFillAmount() != null) {
+                body.append("，金额 ").append(o.getFillAmount()).append(" 元");
+            }
+            if (o.getFees() != null) {
+                body.append("，手续费 ").append(o.getFees()).append(" 元");
+            }
+            if (!PaperOrder.BUY.equals(o.getSide()) && o.getRealizedPnl() != null) {
+                body.append("，本笔")
+                        .append(o.getRealizedPnl().signum() >= 0 ? "盈利 " : "亏损 ")
+                        .append(o.getRealizedPnl().abs())
+                        .append(" 元");
+            }
+        } else {
+            body.append(o.getQty())
+                    .append(" 股未成交：")
+                    .append(StringUtils.defaultIfBlank(o.getRejectReason(), "原因未记录"));
+        }
+        if (StringUtils.isNotBlank(o.getReason())) {
+            body.append("。依据：").append(StringUtils.abbreviate(o.getReason(), 220));
+        }
+        return body.toString();
+    }
+
+    /**
+     * What kind of fill this was, taken from the rule recorded in the order's reason so the title says
+     * 止损 / 止盈 / 到期 rather than a generic "sold".
+     */
+    static String fillLabel(PaperOrder o) {
+        if (PaperOrder.BUY.equals(o.getSide())) {
+            return StringUtils.equals(o.getSource(), "STRATEGY") ? "策略买入" : "买入成交";
+        }
+        String why = StringUtils.defaultString(o.getReason());
+        if (why.contains(Backtester.STOP_LOSS)) {
+            return why.contains(Backtester.TRAILING_STOP) ? Backtester.TRAILING_STOP : Backtester.STOP_LOSS;
+        }
+        for (String kind : List.of(Backtester.TRAILING_STOP, Backtester.PARTIAL_TAKE_PROFIT, Backtester.TAKE_PROFIT,
+                "到期", "均线死叉", "自定义离场")) {
+            if (why.contains(kind)) {
+                return kind;
+            }
+        }
+        return "卖出成交";
+    }
+
+    /** Tells the user that an automatic order could not be placed at all. */
+    private void notifyFailure(String uid, String title, String detail) {
+        try {
+            SendNotificationRequest request = new SendNotificationRequest();
+            request.setType(NotificationType.PERSONAL);
+            request.setTitle(StringUtils.abbreviate(title, 120));
+            request.setBody(StringUtils.abbreviate("未能下单：" + StringUtils.defaultIfBlank(detail, "原因未知")
+                    + "。可在「模拟炒股」页面查看持仓并手动处理。", 480));
+            request.setPayload(new JSONObject().fluentPut("outlink", AShareReviewService.PAGE_PATH).toJSONString());
+            request.setReceiverUids(List.of(uid));
+            notificationService.sendNotification(request);
+            log.info("Order failure notification sent, uid={}, title={}", uid, title);
+        } catch (Exception e) {
+            log.warn("Order failure notification failed, uid={}, errorType={}", uid, e.getClass().getSimpleName());
+        }
     }
 
     private void notifyWatchlist(String uid, List<String> notes) {
