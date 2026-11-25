@@ -4,7 +4,9 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.iflytek.astron.console.hub.entity.ashare.SearchTrial;
 import com.iflytek.astron.console.hub.entity.ashare.TradingStrategyVersion;
+import com.iflytek.astron.console.hub.mapper.ashare.SearchTrialMapper;
 import com.iflytek.astron.console.hub.mapper.ashare.TradingStrategyVersionMapper;
 import com.iflytek.astron.console.hub.service.ashare.EastmoneyClient.Series;
 import com.iflytek.astron.console.toolkit.util.RedisUtil;
@@ -80,6 +82,13 @@ public class StrategyService {
     static final double REGIME_TOLERANCE = 0.5;
     static final double POOL_TOLERANCE = 0.1;
     static final double MAX_DD_WORSENING = 3;
+    /**
+     * Minimum deflated Sharpe ratio: the probability that the true Sharpe is above zero once the number
+     * of candidates already measured against this data is taken into account. 0.95 is the usual "strong
+     * evidence" bar; a proposal, of which there are far fewer, is held to 0.90.
+     */
+    static final double MIN_DEFLATED = 0.90;
+    static final double MIN_DEFLATED_SEARCH = 0.95;
     static final int MIN_TRADES = 20;
     static final int FORWARD_DAYS = 10;
     static final int FORWARD_MAX_DAYS = 30;
@@ -106,6 +115,7 @@ public class StrategyService {
             "002027", "600406", "601985", "003816", "600196", "000538", "600111", "600346");
 
     private final TradingStrategyVersionMapper versionMapper;
+    private final SearchTrialMapper trialMapper;
     private final EastmoneyClient market;
     private final BarStore barStore;
     private final UniverseService universeService;
@@ -257,9 +267,14 @@ public class StrategyService {
                 .fluentPut("note", "约 " + data.calendar().size() + " 个交易日前复权日线回测，规则与实盘相同；得分为夏普比率；历史表现不代表未来。");
         if (trial) {
             Evaluation b = evaluate(base, data);
+            int trials = trialCount(uid) + 1;
+            double dsr = Statistics.deflatedSharpe(e.outOfSample().dailyReturns(), trials,
+                    historicalSharpeSpread(uid));
             out.put("baseline", b.toJson());
             out.put("significanceZ", Indicators.round(z(b, e), 2));
-            out.put("gateCheck", gate(b, e, MIN_IMPROVEMENT, MIN_Z));
+            out.put("deflatedSharpe", Indicators.round(dsr, 3));
+            out.put("trials", trials);
+            out.put("gateCheck", gate(b, e, MIN_IMPROVEMENT, MIN_Z, dsr, MIN_DEFLATED, trials));
         }
         return out;
     }
@@ -275,7 +290,22 @@ public class StrategyService {
      * @param minZ required significance of the Sharpe improvement
      */
     static List<String> gate(Evaluation base, Evaluation cand, double minImprovement, double minZ) {
+        return gate(base, cand, minImprovement, minZ, Double.NaN, 0, 0);
+    }
+
+    /**
+     * @param deflated deflated Sharpe ratio of the candidate, or {@code NaN} to skip the check
+     * @param minDeflated the bar it must clear
+     * @param trials how many candidates have been measured against this data
+     */
+    static List<String> gate(Evaluation base, Evaluation cand, double minImprovement, double minZ, double deflated,
+            double minDeflated, int trials) {
         List<String> reasons = new ArrayList<>();
+        if (!Double.isNaN(deflated) && deflated < minDeflated) {
+            reasons.add(String.format(Locale.ROOT,
+                    "按已检验过的 %d 个候选折减后，真实夏普大于 0 的概率只有 %.0f%%（需 ≥ %.0f%%）：这个结果还不能和「搜索得多自然会碰到」区分开",
+                    trials, deflated * 100, minDeflated * 100));
+        }
         Backtester.Metrics b = base.outOfSample();
         Backtester.Metrics c = cand.outOfSample();
         if (c.score() <= b.score() + minImprovement) {
@@ -370,8 +400,14 @@ public class StrategyService {
             Data data = loadData(List.of(base, cand), true);
             Evaluation baseEval = evaluate(base, data);
             Evaluation candEval = evaluate(cand, data);
-            List<String> reasons = gate(baseEval, candEval, MIN_IMPROVEMENT, MIN_Z);
-            return saveVersion(uid, active, base, cand, baseEval, candEval, reasons, rationale.trim(), "提案", null, null);
+            int trials = trialCount(uid) + 1;
+            double dsr = Statistics.deflatedSharpe(candEval.outOfSample().dailyReturns(), trials,
+                    historicalSharpeSpread(uid));
+            List<String> reasons = gate(baseEval, candEval, MIN_IMPROVEMENT, MIN_Z, dsr, MIN_DEFLATED, trials);
+            recordTrial(uid, cand, base, active.getVersion(), baseEval, candEval, dsr, trials, reasons.isEmpty(),
+                    SearchTrial.PROPOSAL);
+            return saveVersion(uid, active, base, cand, baseEval, candEval, reasons, rationale.trim(), "提案",
+                    String.format(Locale.ROOT, "（折减后真实夏普>0 的概率 %.0f%%，已检验 %d 个候选）", dsr * 100, trials), null);
         });
     }
 
@@ -582,7 +618,7 @@ public class StrategyService {
     }
 
     /** One backtested candidate of a search. */
-    record Scored(StrategyParams params, Evaluation eval, List<String> reasons) {}
+    record Scored(StrategyParams params, Evaluation eval, List<String> reasons, double deflatedSharpe) {}
 
     /**
      * Automatic evolution: backtests {@link #SEARCH_CANDIDATES} mutations of the active version (one or
@@ -612,10 +648,28 @@ public class StrategyService {
             List<StrategyParams> candidates = candidates(base, seed, SEARCH_CANDIDATES, tried);
             Data data = loadData(List.of(base), true);
             Evaluation baseEval = evaluate(base, data);
-            List<Scored> scored = new ArrayList<>();
+            // Every candidate is evaluated first, then judged: the spread of their scores and the
+            // running trial count are both needed before any of them can be deflated.
+            int trialsBefore = trialCount(uid);
+            List<Evaluation> evals = new ArrayList<>();
+            List<Double> sharpes = new ArrayList<>();
             for (StrategyParams c : candidates) {
                 Evaluation e = evaluate(c, data);
-                scored.add(new Scored(c, e, gate(baseEval, e, MIN_IMPROVEMENT_SEARCH, MIN_Z_SEARCH)));
+                evals.add(e);
+                sharpes.add(e.outOfSample().score());
+            }
+            double spread = Statistics.sharpeSpread(sharpes);
+            int trials = trialsBefore + candidates.size();
+            List<Scored> scored = new ArrayList<>();
+            for (int i = 0; i < candidates.size(); i++) {
+                StrategyParams c = candidates.get(i);
+                Evaluation e = evals.get(i);
+                double dsr = Statistics.deflatedSharpe(e.outOfSample().dailyReturns(), trials, spread);
+                List<String> reasons = gate(baseEval, e, MIN_IMPROVEMENT_SEARCH, MIN_Z_SEARCH, dsr,
+                        MIN_DEFLATED_SEARCH, trials);
+                scored.add(new Scored(c, e, reasons, dsr));
+                recordTrial(uid, c, base, active.getVersion(), baseEval, e, dsr, trials, reasons.isEmpty(),
+                        SearchTrial.SEARCH);
             }
             scored.sort(Comparator.comparingDouble((Scored s) -> -s.eval().outOfSample().score()));
             Scored best = scored.stream().filter(s -> s.reasons().isEmpty()).findFirst().orElse(null);
@@ -631,6 +685,7 @@ public class StrategyService {
                         .fluentPut("oosMaxDrawdownPct", Indicators.round(o.maxDrawdownPct(), 2))
                         .fluentPut("exposurePct", Indicators.round(o.exposurePct(), 1))
                         .fluentPut("z", Indicators.round(z(baseEval, s.eval()), 2))
+                        .fluentPut("deflatedSharpe", Indicators.round(s.deflatedSharpe(), 3))
                         .fluentPut("windowsWon", windowsWon(baseEval, s.eval()))
                         .fluentPut("windows", s.eval().windows().size())
                         .fluentPut("trades", o.trades())
@@ -642,6 +697,8 @@ public class StrategyService {
                     .fluentPut("passed", passed)
                     .fluentPut("baselineVersion", active.getVersion())
                     .fluentPut("baselineOosScore", Indicators.round(baseEval.outOfSample().score(), 2))
+                    .fluentPut("trials", trials)
+                    .fluentPut("minDeflated", MIN_DEFLATED_SEARCH)
                     .fluentPut("historyDays", data.calendar().size())
                     .fluentPut("poolSize", data.pool() == null ? 0 : data.pool().size())
                     .fluentPut("top", top);
@@ -1157,11 +1214,83 @@ public class StrategyService {
     static String gateText() {
         return String.format(Locale.ROOT,
                 "采纳流程：① 回测闸门——约 %d 个交易日（4 年）回测，最近 %d 天为样本外（%d 个 %d 日窗口）；样本外夏普需比当前版本高 %.1f（自动搜索 %.1f）且统计显著（z ≥ %.2f，搜索 %.2f），"
+                        + "并按「历史上已检验过多少个候选」折减（折减后真实夏普 > 0 的概率需 ≥ 90%%，自动搜索 ≥ 95%%；搜得越多门槛越高，防止把运气当本事），"
                         + "窗口至少赢 %d 个且包括最近一个，上涨/下跌/震荡阶段都不明显变差，扩展验证池（规则筛选每月前 100 只，按当月时点；筛选数据未就绪时为约 60 只手选大盘股）上不变差，回撤恶化不超过 %.0f 个点，成交至少 %d 笔；"
                         + "② 前进测试——在之后至少 %d 个交易日的新行情上不差于当前版本，才正式采纳。每天最多 %d 次提案、%d 次自动搜索。",
                 HISTORY_DAYS, OOS_DAYS, OOS_DAYS / WINDOW_DAYS, WINDOW_DAYS, MIN_IMPROVEMENT, MIN_IMPROVEMENT_SEARCH, MIN_Z,
                 MIN_Z_SEARCH, MIN_WINDOWS_WON, MAX_DD_WORSENING, MIN_TRADES, FORWARD_DAYS, MAX_PROPOSALS_PER_DAY,
                 MAX_SEARCHES_PER_DAY);
+    }
+
+    /** How many candidates have ever been measured against this user's out-of-sample data. */
+    int trialCount(String uid) {
+        Long n = trialMapper.selectCount(Wrappers.lambdaQuery(SearchTrial.class).eq(SearchTrial::getUid, uid));
+        return n == null ? 0 : n.intValue();
+    }
+
+    /** Spread of the Sharpe ratios measured so far, for deflating a single proposal. */
+    private double historicalSharpeSpread(String uid) {
+        List<SearchTrial> rows = trialMapper.selectList(Wrappers.lambdaQuery(SearchTrial.class)
+                .select(SearchTrial::getOosScore)
+                .eq(SearchTrial::getUid, uid)
+                .isNotNull(SearchTrial::getOosScore)
+                .orderByDesc(SearchTrial::getId)
+                .last("LIMIT 500"));
+        return Statistics.sharpeSpread(rows.stream().map(SearchTrial::getOosScore).toList());
+    }
+
+    /**
+     * Saves what a candidate scored. This is the record the deflation depends on, so it is written for
+     * every candidate, not only the winners.
+     */
+    private void recordTrial(String uid, StrategyParams cand, StrategyParams base, Integer baseVersion,
+            Evaluation baseEval, Evaluation eval, double deflated, int trials, boolean passed, String origin) {
+        try {
+            SearchTrial row = new SearchTrial();
+            row.setUid(uid);
+            row.setParamsHash(hash(cand.toJson()));
+            row.setChanges(StringUtils.abbreviate(cand.diff(base), 500));
+            row.setFields(StringUtils.abbreviate(changedFields(cand, base), 255));
+            row.setBaseVersion(baseVersion);
+            row.setOosScore(Indicators.round(eval.outOfSample().score(), 4));
+            row.setOosReturnPct(Indicators.round(eval.outOfSample().returnPct(), 3));
+            row.setSignificanceZ(Indicators.round(z(baseEval, eval), 3));
+            row.setDeflatedSharpe(Double.isNaN(deflated) ? null : Indicators.round(deflated, 4));
+            row.setTrialsAtTime(trials);
+            row.setPassed(passed ? 1 : 0);
+            row.setOrigin(origin);
+            trialMapper.insert(row);
+        } catch (RuntimeException e) {
+            log.warn("Search trial not recorded, uid={}, errorType={}, msg={}", uid, e.getClass().getSimpleName(),
+                    e.getMessage());
+        }
+    }
+
+    /** Names of the fields a candidate changed, for per-field statistics later. */
+    static String changedFields(StrategyParams cand, StrategyParams base) {
+        JSONObject a = JSONObject.from(base);
+        JSONObject b = JSONObject.from(cand);
+        List<String> out = new ArrayList<>();
+        for (String key : StrategyParams.FIELD_ORDER) {
+            if (!String.valueOf(a.get(key)).equals(String.valueOf(b.get(key)))) {
+                out.add(key);
+            }
+        }
+        return String.join(",", out);
+    }
+
+    private static String hash(String text) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] d = md.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte x : d) {
+                sb.append(String.format("%02x", x));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(text.hashCode());
+        }
     }
 
     private int nextVersion(String uid) {
