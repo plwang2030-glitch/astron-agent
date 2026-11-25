@@ -89,6 +89,13 @@ public class StrategyService {
      */
     static final double MIN_DEFLATED = 0.90;
     static final double MIN_DEFLATED_SEARCH = 0.95;
+    /**
+     * Above this, picking the best candidate on part of the data demonstrably says nothing about the
+     * rest, so the search promotes nothing that period however good the winner looks.
+     */
+    static final double MAX_OVERFIT_PROBABILITY = 0.5;
+    /** Share of the search budget kept on uniformly random directions, so none is ever starved. */
+    static final double EXPLORE_SHARE = 0.4;
     static final int MIN_TRADES = 20;
     static final int FORWARD_DAYS = 10;
     static final int FORWARD_MAX_DAYS = 30;
@@ -650,7 +657,9 @@ public class StrategyService {
                 tried.add(StrategyParams.parse(v.getParams()).toJson());
             }
             long seed = Objects.hash(uid, period == null ? TradingClock.now().toString() : period, active.getVersion());
-            List<StrategyParams> candidates = candidates(base, seed, SEARCH_CANDIDATES, tried);
+            Map<String, double[]> fieldStats = fieldStats(uid);
+            List<StrategyParams> candidates = candidates(base, seed, SEARCH_CANDIDATES, tried, fieldStats,
+                    trialCount(uid));
             Data data = loadData(List.of(base), true);
             Evaluation baseEval = evaluate(base, data);
             // Every candidate is evaluated first, then judged: the spread of their scores and the
@@ -665,6 +674,8 @@ public class StrategyService {
             }
             double spread = Statistics.sharpeSpread(sharpes);
             int trials = trialsBefore + candidates.size();
+            // Does picking the best candidate on part of the data say anything about the rest?
+            double overfitProbability = overfitProbability(evals);
             List<Scored> scored = new ArrayList<>();
             for (int i = 0; i < candidates.size(); i++) {
                 StrategyParams c = candidates.get(i);
@@ -677,7 +688,10 @@ public class StrategyService {
                         SearchTrial.SEARCH);
             }
             scored.sort(Comparator.comparingDouble((Scored s) -> -s.eval().outOfSample().score()));
-            Scored best = scored.stream().filter(s -> s.reasons().isEmpty()).findFirst().orElse(null);
+            boolean selectionUnreliable = !Double.isNaN(overfitProbability)
+                    && overfitProbability > MAX_OVERFIT_PROBABILITY;
+            Scored best = selectionUnreliable ? null
+                    : scored.stream().filter(s -> s.reasons().isEmpty()).findFirst().orElse(null);
             long passed = scored.stream().filter(s -> s.reasons().isEmpty()).count();
             String label = (period == null ? "手动" : period) + " 自动进化搜索";
             JSONArray top = new JSONArray();
@@ -704,6 +718,9 @@ public class StrategyService {
                     .fluentPut("baselineOosScore", Indicators.round(baseEval.outOfSample().score(), 2))
                     .fluentPut("trials", trials)
                     .fluentPut("minDeflated", MIN_DEFLATED_SEARCH)
+                    .fluentPut("overfitProbability", Double.isNaN(overfitProbability) ? null
+                            : Indicators.round(overfitProbability, 3))
+                    .fluentPut("selectionUnreliable", selectionUnreliable)
                     .fluentPut("historyDays", data.calendar().size())
                     .fluentPut("poolSize", data.pool() == null ? 0 : data.pool().size())
                     .fluentPut("top", top);
@@ -715,7 +732,11 @@ public class StrategyService {
                 out.put("trial", saved);
             } else {
                 Scored first = scored.isEmpty() ? null : scored.get(0);
-                String meta = label + "：试了 " + scored.size() + " 个候选，没有通过闸门，当前仍为 v" + active.getVersion()
+                String meta = label + "：试了 " + scored.size() + " 个候选，没有"
+                        + (selectionUnreliable ? String.format(Locale.ROOT,
+                                "采纳任何候选——本期「挑最好的」本身不可靠（过拟合概率 %.0f%%，超过 %.0f%%），即使看起来最好的也不采纳",
+                                overfitProbability * 100, MAX_OVERFIT_PROBABILITY * 100) : "通过闸门")
+                        + "，当前仍为 v" + active.getVersion()
                         + (first == null ? "。"
                                 : String.format(Locale.ROOT, "。最好的候选：%s，样本外夏普 %.2f vs 基线 %.2f，未通过：%s。",
                                         first.params().diff(base), first.eval().outOfSample().score(),
@@ -732,14 +753,66 @@ public class StrategyService {
     }
 
     /**
+     * Probability that choosing the best of these candidates on part of the period says nothing about
+     * the rest, from their 60-day window scores. {@code NaN} when the windows do not line up.
+     */
+    static double overfitProbability(List<Evaluation> evals) {
+        if (evals.size() < 2) {
+            return Double.NaN;
+        }
+        int blocks = evals.get(0).windows().size();
+        if (blocks < 4) {
+            return Double.NaN;
+        }
+        double[][] matrix = new double[evals.size()][];
+        for (int i = 0; i < evals.size(); i++) {
+            List<Backtester.Metrics> w = evals.get(i).windows();
+            if (w.size() != blocks) {
+                return Double.NaN;
+            }
+            double[] row = new double[blocks];
+            for (int b = 0; b < blocks; b++) {
+                row[b] = w.get(b).score();
+            }
+            matrix[i] = row;
+        }
+        // CSCV needs an even number of blocks to split symmetrically; drop the oldest if need be.
+        if (blocks % 2 != 0) {
+            for (int i = 0; i < matrix.length; i++) {
+                matrix[i] = java.util.Arrays.copyOfRange(matrix[i], 1, blocks);
+            }
+        }
+        return Statistics.probabilityOfOverfitting(matrix);
+    }
+
+    /**
      * Mutations of {@code base} for the search: every valid single change of one number, option or rule
      * threshold, plus pairs of changes to different fields, shuffled with {@code seed}; never
      * {@code base} itself or a version in {@code tried}. The universe is left alone.
      */
     static List<StrategyParams> candidates(StrategyParams base, long seed, int n, Set<String> tried) {
+        return candidates(base, seed, n, tried, Map.of(), 0);
+    }
+
+    /**
+     * Mutations to try, ordered so that part of the budget follows what has worked before and the rest
+     * stays uniformly random. Starving a direction entirely would let one lucky early result decide
+     * where the search looks forever.
+     */
+    static List<StrategyParams> candidates(StrategyParams base, long seed, int n, Set<String> tried,
+            Map<String, double[]> fieldStats, int totalTrials) {
         List<JSONObject> singles = mutations(base);
         Random random = new Random(seed);
         Collections.shuffle(singles, random);
+        if (!fieldStats.isEmpty()) {
+            int keepRandom = (int) Math.round(singles.size() * EXPLORE_SHARE);
+            List<JSONObject> explore = new ArrayList<>(singles.subList(0, Math.min(keepRandom, singles.size())));
+            List<JSONObject> exploit = new ArrayList<>(singles.subList(Math.min(keepRandom, singles.size()),
+                    singles.size()));
+            exploit.sort(Comparator.comparingDouble((JSONObject m) -> -preference(m, fieldStats, totalTrials)));
+            singles = new ArrayList<>(exploit);
+            singles.addAll(explore);
+        }
         Map<String, StrategyParams> out = new LinkedHashMap<>();
         Set<String> skip = new HashSet<>(tried);
         skip.add(base.toJson());
@@ -1225,6 +1298,45 @@ public class StrategyService {
                 HISTORY_DAYS, OOS_DAYS, OOS_DAYS / WINDOW_DAYS, WINDOW_DAYS, MIN_IMPROVEMENT, MIN_IMPROVEMENT_SEARCH, MIN_Z,
                 MIN_Z_SEARCH, MIN_WINDOWS_WON, MAX_DD_WORSENING, MIN_TRADES, FORWARD_DAYS, MAX_PROPOSALS_PER_DAY,
                 MAX_SEARCHES_PER_DAY);
+    }
+
+    /**
+     * What each search direction has produced so far: how often a field was changed and the average
+     * out-of-sample score when it was. Used to aim the next search budget.
+     */
+    Map<String, double[]> fieldStats(String uid) {
+        List<SearchTrial> rows = trialMapper.selectList(Wrappers.lambdaQuery(SearchTrial.class)
+                .eq(SearchTrial::getUid, uid)
+                .isNotNull(SearchTrial::getOosScore)
+                .orderByDesc(SearchTrial::getId)
+                .last("LIMIT 2000"));
+        Map<String, double[]> out = new LinkedHashMap<>();
+        for (SearchTrial t : rows) {
+            for (String field : StringUtils.split(StringUtils.defaultString(t.getFields()), ',')) {
+                double[] acc = out.computeIfAbsent(field.trim(), k -> new double[2]);
+                acc[0]++;
+                acc[1] += t.getOosScore();
+            }
+        }
+        out.replaceAll((k, v) -> new double[] {v[0], v[0] > 0 ? v[1] / v[0] : 0});
+        return out;
+    }
+
+    /**
+     * Preference for each candidate mutation, from the upper confidence bound of the fields it changes:
+     * a direction that has done well is tried more, a direction barely tried is still guaranteed a
+     * look, and a known dead end stops consuming the budget. This only moves where the search looks;
+     * whether anything is adopted is still decided by the gate.
+     */
+    static double preference(JSONObject patch, Map<String, double[]> stats, int total) {
+        double best = Double.NEGATIVE_INFINITY;
+        for (String field : patch.keySet()) {
+            double[] acc = stats.get(field);
+            double ucb = acc == null ? Double.POSITIVE_INFINITY
+                    : Statistics.upperConfidenceBound(acc[1], (int) acc[0], total);
+            best = Math.max(best, ucb);
+        }
+        return best == Double.NEGATIVE_INFINITY ? 0 : best;
     }
 
     /** How many candidates have ever been measured against this user's out-of-sample data. */

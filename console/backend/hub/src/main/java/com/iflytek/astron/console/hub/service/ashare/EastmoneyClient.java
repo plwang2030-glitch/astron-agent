@@ -129,7 +129,16 @@ public class EastmoneyClient {
                     .addQueryParameter("invt", "2")
                     .addQueryParameter("fields", QUOTE_FIELDS)
                     .build();
-            JSONObject data = get(url, quoteHosts).getJSONObject("data");
+            JSONObject data;
+            try {
+                data = get(url, quoteHosts).getJSONObject("data");
+            } catch (AShareDataException e) {
+                // Orders are priced from this call, so one provider being unreachable must not stop a
+                // stop loss or a scheduled exit: on 2026-11-25 every Eastmoney quote host refused
+                // connections at 14:50 and a sell was skipped. Tencent carries the prices we need.
+                log.warn("Eastmoney quote unavailable, trying Tencent, secid={}, msg={}", secid, e.getMessage());
+                return tencentQuote(secid);
+            }
             if (data == null || StringUtils.isBlank(data.getString("f57"))) {
                 throw new AShareDataException("没有查到行情：" + secid);
             }
@@ -138,6 +147,28 @@ public class EastmoneyClient {
                     num(data, "f47"), num(data, "f48"), num(data, "f116"), num(data, "f117"), num(data, "f162"),
                     num(data, "f167"), num(data, "f168"), quoteTime(data));
         });
+    }
+
+    /**
+     * Price, open, high, low and previous close from Tencent, used when Eastmoney cannot be reached.
+     * Valuation fields (PE, PB, market cap) are not published there and stay {@code null}, which
+     * {@link DataQuality} reports as missing rather than as zero.
+     */
+    private Quote tencentQuote(String secid) {
+        String code = secid.substring(secid.indexOf('.') + 1);
+        String symbol = CALENDAR_SECID.equals(secid) ? "sh" + code : AShareRules.sinaSymbol(code);
+        String text = getText(HttpUrl.parse("https://qt.gtimg.cn/q=" + symbol), "https://gu.qq.com/",
+                java.nio.charset.Charset.forName("GBK"));
+        LiveQuote q = parseTencentQuotes(text).get(code);
+        if (q == null || q.price() == null) {
+            throw new AShareDataException("没有查到行情：" + secid + "（东方财富和腾讯都取不到）");
+        }
+        BigDecimal change = q.prevClose() == null ? null : q.price().subtract(q.prevClose());
+        BigDecimal pct = q.prevClose() == null || q.prevClose().signum() == 0 ? null
+                : change.multiply(BigDecimal.valueOf(100)).divide(q.prevClose(), 2, java.math.RoundingMode.HALF_UP);
+        log.info("Quote served by Tencent, code={}, price={}", code, q.price());
+        return new Quote(q.code(), q.name(), q.price(), q.open(), q.high(), q.low(), q.prevClose(), change, pct,
+                null, null, null, null, null, null, null, q.time());
     }
 
     /**

@@ -27,8 +27,9 @@ class DeflatedGateTest {
 
     private static Backtester.Metrics metrics(double score, double returnPct, double dd, int trades,
             double[] daily) {
-        return new Backtester.Metrics(LocalDate.of(2026, 1, 5), LocalDate.of(2026, 11, 25), returnPct, dd, trades,
-                60, score, 20, daily);
+        // Metrics(from, to, returnPct, maxDrawdownPct, score, trades, winRatePct, exposurePct, daily)
+        return new Backtester.Metrics(LocalDate.of(2026, 1, 5), LocalDate.of(2026, 11, 25), returnPct, dd, score,
+                trades, 60, 20, daily);
     }
 
     /** An evaluation good enough to clear every criterion except the deflation. */

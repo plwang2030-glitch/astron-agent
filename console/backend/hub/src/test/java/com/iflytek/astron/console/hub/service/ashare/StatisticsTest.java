@@ -104,6 +104,69 @@ class StatisticsTest {
     }
 
     @Test
+    void overfittingIsZeroWhenOneCandidateIsGenuinelyBest() {
+        // Candidate 0 leads in every block, so picking the leader always generalizes.
+        double[][] m = {
+                {2, 2, 2, 2, 2, 2},
+                {1, 1, 1, 1, 1, 1},
+                {0, 0, 0, 0, 0, 0}};
+        assertEquals(0.0, Statistics.probabilityOfOverfitting(m), 1e-9);
+    }
+
+    @Test
+    void overfittingIsOneWhenTheLeaderIsAlwaysTheWorstElsewhere() {
+        // Candidate 0 wins the first three blocks and loses the last three, and vice versa: whichever
+        // half is used to choose, the choice is wrong on the other half.
+        double[][] m = {
+                {5, 5, 5, -5, -5, -5},
+                {-5, -5, -5, 5, 5, 5}};
+        assertEquals(1.0, Statistics.probabilityOfOverfitting(m), 1e-9);
+    }
+
+    @Test
+    void pureNoiseLandsNearACoinToss() {
+        Random r = new Random(42);
+        double[][] m = new double[30][6];
+        for (double[] row : m) {
+            for (int b = 0; b < row.length; b++) {
+                row[b] = r.nextGaussian();
+            }
+        }
+        double pbo = Statistics.probabilityOfOverfitting(m);
+        assertTrue(pbo > 0.25 && pbo < 0.75, "pbo=" + pbo);
+    }
+
+    @Test
+    void overfittingNeedsEnoughCandidatesAndAnEvenBlockCount() {
+        double[][] one = {{1, 1, 1, 1, 1, 1}};
+        assertTrue(Double.isNaN(Statistics.probabilityOfOverfitting(one)));
+        assertTrue(Double.isNaN(Statistics.probabilityOfOverfitting(null)));
+        // Odd or too few blocks cannot be split into symmetric halves.
+        assertTrue(Double.isNaN(Statistics.probabilityOfOverfitting(new double[][] {{1, 2, 3}, {3, 2, 1}})));
+        assertTrue(Double.isNaN(Statistics.probabilityOfOverfitting(new double[][] {{1, 2}, {2, 1}})));
+        // Ragged input is refused rather than guessed at.
+        assertTrue(Double.isNaN(Statistics.probabilityOfOverfitting(
+                new double[][] {{1, 2, 3, 4, 5, 6}, {1, 2, 3}})));
+    }
+
+    @Test
+    void splitsAreEverySymmetricHalf() {
+        assertEquals(20, Statistics.combinations(6, 3).size());
+        assertEquals(6, Statistics.combinations(4, 2).size());
+    }
+
+    @Test
+    void anUntriedDirectionIsAlwaysWorthALook() {
+        assertEquals(Double.POSITIVE_INFINITY, Statistics.upperConfidenceBound(5, 0, 100));
+        // A direction tried once keeps a large bonus; one tried often is judged mostly on its average.
+        double rare = Statistics.upperConfidenceBound(0.0, 1, 100);
+        double common = Statistics.upperConfidenceBound(0.0, 100, 100);
+        assertTrue(rare > common, rare + " > " + common);
+        // A better average still wins between equally tried directions.
+        assertTrue(Statistics.upperConfidenceBound(0.5, 10, 100) > Statistics.upperConfidenceBound(0.1, 10, 100));
+    }
+
+    @Test
     void spreadOfTheSearchesOwnSharpes() {
         assertEquals(0, Statistics.sharpeSpread(List.of()));
         assertEquals(0, Statistics.sharpeSpread(List.of(1.0)));

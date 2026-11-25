@@ -1,5 +1,7 @@
 package com.iflytek.astron.console.hub.service.ashare;
 
+import java.util.List;
+
 /**
  * Statistics for judging whether a backtest result is a discovery or the best of many tries.
  * <p>
@@ -15,6 +17,8 @@ package com.iflytek.astron.console.hub.service.ashare;
  * and they are separate.
  */
 public final class Statistics {
+
+
 
     /** Euler–Mascheroni constant, from the expected maximum of N normal draws. */
     static final double EULER = 0.5772156649015329;
@@ -178,6 +182,119 @@ public final class Statistics {
         }
         double z = (sharpe - expectedMax) * Math.sqrt(t - 1) / Math.sqrt(variance);
         return normalCdf(z);
+    }
+
+    /**
+     * Probability of backtest overfitting, by the combinatorially symmetric cross-validation of Bailey,
+     * Borwein, López de Prado and Zhu. It asks a different question from {@link #deflatedSharpe}: not
+     * "is this one result real", but "does picking the best candidate on part of the data tell us
+     * anything about the rest".
+     * <p>
+     * The time blocks are split every possible way into halves. In each split the candidate that led in
+     * one half is found, and its rank in the other half is recorded. The answer is the share of splits
+     * where the leader ends up below the median: near 0 means the selection generalizes, 0.5 means it
+     * is a coin toss, and near 1 means picking the best is actively misleading.
+     *
+     * @param blockScores one row per candidate, one column per time block
+     * @return the probability in [0, 1], or {@code NaN} when there is too little to compare
+     */
+    public static double probabilityOfOverfitting(double[][] blockScores) {
+        if (blockScores == null || blockScores.length < 2) {
+            return Double.NaN;
+        }
+        int candidates = blockScores.length;
+        int blocks = blockScores[0].length;
+        if (blocks < 4 || blocks % 2 != 0) {
+            return Double.NaN;
+        }
+        for (double[] row : blockScores) {
+            if (row == null || row.length != blocks) {
+                return Double.NaN;
+            }
+        }
+        List<int[]> splits = combinations(blocks, blocks / 2);
+        if (splits.isEmpty()) {
+            return Double.NaN;
+        }
+        int below = 0;
+        int counted = 0;
+        for (int[] inSample : splits) {
+            boolean[] isIn = new boolean[blocks];
+            for (int b : inSample) {
+                isIn[b] = true;
+            }
+            int best = -1;
+            double bestScore = Double.NEGATIVE_INFINITY;
+            double[] outOfSample = new double[candidates];
+            for (int c = 0; c < candidates; c++) {
+                double in = 0;
+                double out = 0;
+                for (int b = 0; b < blocks; b++) {
+                    if (isIn[b]) {
+                        in += blockScores[c][b];
+                    } else {
+                        out += blockScores[c][b];
+                    }
+                }
+                outOfSample[c] = out;
+                if (in > bestScore) {
+                    bestScore = in;
+                    best = c;
+                }
+            }
+            if (best < 0) {
+                continue;
+            }
+            // The leader's rank on the held-out blocks, lowest first, mapped into (0,1) as
+            // rank/(N+1) so that the median sits at 0.5 whatever the number of candidates.
+            int beaten = 0;
+            for (int c = 0; c < candidates; c++) {
+                if (c != best && outOfSample[c] > outOfSample[best]) {
+                    beaten++;
+                }
+            }
+            double relativeRank = (double) (candidates - beaten) / (candidates + 1);
+            counted++;
+            if (relativeRank < 0.5) {
+                below++;
+            }
+        }
+        return counted == 0 ? Double.NaN : (double) below / counted;
+    }
+
+    /** All ways of choosing {@code k} of {@code n} block indices. */
+    static List<int[]> combinations(int n, int k) {
+        List<int[]> out = new java.util.ArrayList<>();
+        int[] current = new int[k];
+        combine(out, current, 0, 0, n, k);
+        return out;
+    }
+
+    private static void combine(List<int[]> out, int[] current, int at, int from, int n, int k) {
+        if (at == k) {
+            out.add(current.clone());
+            return;
+        }
+        for (int i = from; i < n; i++) {
+            current[at] = i;
+            combine(out, current, at + 1, i + 1, n, k);
+        }
+    }
+
+    /**
+     * Upper confidence bound for a search direction: its average result plus a bonus for how little it
+     * has been tried, so a direction is never written off after one bad attempt and an untried one is
+     * always worth a look.
+     *
+     * @param mean average out-of-sample score of this direction so far
+     * @param tried how many times it has been tried
+     * @param total trials across all directions
+     */
+    public static double upperConfidenceBound(double mean, int tried, int total) {
+        if (tried <= 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return mean + Math.sqrt(2 * Math.log(Math.max(2, total)) / tried);
     }
 
     /** Annualized Sharpe ratio of daily returns, as used elsewhere in the gate. */
