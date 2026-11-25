@@ -49,10 +49,26 @@ public class StrategyParams {
     public static final String MANUAL = "MANUAL";
     public static final Set<String> UNIVERSE_MODES = Set.of(AUTO, MANUAL);
     public static final int DEFAULT_UNIVERSE_SIZE = 30;
+    /** Stop loss a fixed percentage below the entry. */
+    public static final String PCT = "PCT";
+    /** Stop loss {@link #stopAtrMult} × ATR14 below the entry, i.e. scaled to the stock's own noise. */
+    public static final String ATR = "ATR";
+    public static final Set<String> STOP_MODES = Set.of(PCT, ATR);
+    /** Bounds on the ATR stop distance: never inside the noise, never a runaway loss. */
+    public static final double MIN_STOP_PCT = 2;
+    public static final double MAX_STOP_PCT = 25;
+    /** Price-level exits trigger the moment the price touches them during the day. */
+    public static final String INTRADAY = "INTRADAY";
+    /** Price-level exits are judged on the near-final close at 14:50 only. */
+    public static final String CLOSE = "CLOSE";
+    /** Half the position on an intraday touch, the rest if the close confirms it. */
+    public static final String HALF_THEN_CLOSE = "HALF_THEN_CLOSE";
+    public static final Set<String> EXIT_CHECKS = Set.of(INTRADAY, CLOSE, HALF_THEN_CLOSE);
     /** In the order shown by {@link #diff}. */
     static final List<String> FIELD_ORDER = List.of("universeMode", "universeSize", "universe", "entryType", "maFast", "maSlow", "crossWithinDays",
             "breakoutDays", "rsiMin", "rsiMax", "volumeRatioMin", "requireAboveMa60", "marketFilter", "sizing",
-            "riskPerTradePct", "stopLossPct", "trailingStopPct", "partialTakeProfitPct", "takeProfitPct",
+            "riskPerTradePct", "stopMode", "stopAtrMult", "stopLossPct", "exitCheck", "trailingStopPct",
+            "partialTakeProfitPct", "takeProfitPct",
             "maxHoldDays", "exitOnMaCrossDown", "customEntry", "customExit", "maxPositions", "maxWeightPct");
     /**
      * Patchable fields; anything else in a proposal is ignored. The universe mode is a method change
@@ -85,7 +101,18 @@ public class StrategyParams {
     private Boolean marketFilter;
     private String sizing;
     private Double riskPerTradePct;
+    /** PCT: a fixed percentage; ATR: scaled to the stock's volatility. */
+    private String stopMode;
+    /** Multiple of ATR14 for the stop in ATR mode. */
+    private Double stopAtrMult;
     private Double stopLossPct;
+    /**
+     * When price-level exits (stop loss, trailing stop, take profit) are judged: the moment the price
+     * touches the level, only on the near-final close, or half on the touch and the rest on the close.
+     * Intraday moves are largely noise, so confirming on the close trades a slower exit for far fewer
+     * exits caused by a dip that reverses.
+     */
+    private String exitCheck;
     /** 0: off. */
     private Double trailingStopPct;
     /** 0: off. Sells half the position there. */
@@ -126,7 +153,10 @@ public class StrategyParams {
         p.marketFilter = false;
         p.sizing = EQUAL;
         p.riskPerTradePct = 1.0;
+        p.stopMode = PCT;
+        p.stopAtrMult = 2.5;
         p.stopLossPct = 8.0;
+        p.exitCheck = INTRADAY;
         p.trailingStopPct = 0.0;
         p.partialTakeProfitPct = 0.0;
         p.takeProfitPct = 20.0;
@@ -164,6 +194,9 @@ public class StrategyParams {
         requireAboveMa60 = Objects.requireNonNullElse(requireAboveMa60, d.requireAboveMa60);
         marketFilter = Objects.requireNonNullElse(marketFilter, d.marketFilter);
         sizing = Objects.requireNonNullElse(sizing, d.sizing);
+        stopMode = Objects.requireNonNullElse(stopMode, d.stopMode);
+        stopAtrMult = Objects.requireNonNullElse(stopAtrMult, d.stopAtrMult);
+        exitCheck = Objects.requireNonNullElse(exitCheck, d.exitCheck);
         riskPerTradePct = Objects.requireNonNullElse(riskPerTradePct, d.riskPerTradePct);
         stopLossPct = Objects.requireNonNullElse(stopLossPct, d.stopLossPct);
         trailingStopPct = Objects.requireNonNullElse(trailingStopPct, d.trailingStopPct);
@@ -191,6 +224,8 @@ public class StrategyParams {
         merged.entryType = upper(merged.entryType);
         merged.universeMode = upper(merged.universeMode);
         merged.sizing = upper(merged.sizing);
+        merged.stopMode = upper(merged.stopMode);
+        merged.exitCheck = upper(merged.exitCheck);
         return merged;
     }
 
@@ -211,6 +246,21 @@ public class StrategyParams {
     /** Copy of this version. */
     public StrategyParams copy() {
         return parse(toJson());
+    }
+
+    /** The stop is scaled to the stock's own volatility instead of a fixed percentage. */
+    public boolean atrStop() {
+        return ATR.equals(stopMode);
+    }
+
+    /** Price-level exits are not acted on the moment the price touches them. */
+    public boolean confirmOnClose() {
+        return CLOSE.equals(exitCheck) || HALF_THEN_CLOSE.equals(exitCheck);
+    }
+
+    /** Sells half on an intraday touch and the rest only if the close confirms it. */
+    public boolean halfOnTouch() {
+        return HALF_THEN_CLOSE.equals(exitCheck);
     }
 
     public boolean autoUniverse() {
@@ -242,11 +292,20 @@ public class StrategyParams {
      * stop loss costs {@code riskPerTradePct} of equity, never more than {@code maxWeightPct}.
      */
     public double positionBudget(double equity) {
+        return positionBudget(equity, stopLossPct);
+    }
+
+    /**
+     * @param stopDistancePct how far the stop actually is below the entry, which in ATR mode differs
+     *        per stock; sizing from it keeps the loss at the stop equal to {@code riskPerTradePct} of
+     *        equity whatever the stock's volatility
+     */
+    public double positionBudget(double equity, double stopDistancePct) {
         double cap = equity * maxWeightPct / 100;
-        if (!RISK.equals(sizing) || stopLossPct <= 0) {
+        if (!RISK.equals(sizing) || stopDistancePct <= 0) {
             return cap;
         }
-        return Math.min(cap, equity * riskPerTradePct / stopLossPct);
+        return Math.min(cap, equity * riskPerTradePct / stopDistancePct);
     }
 
     /** Bounds that keep evolution in a sane range; empty when valid. */
@@ -278,6 +337,13 @@ public class StrategyParams {
         if (!SIZINGS.contains(sizing)) {
             errors.add("sizing 只能是 EQUAL / RISK");
         }
+        if (!STOP_MODES.contains(stopMode)) {
+            errors.add("stopMode 只能是 PCT / ATR");
+        }
+        if (!EXIT_CHECKS.contains(exitCheck)) {
+            errors.add("exitCheck 只能是 INTRADAY / CLOSE / HALF_THEN_CLOSE");
+        }
+        range(errors, "stopAtrMult", stopAtrMult, 1.0, 5.0);
         range(errors, "maFast", maFast, 3, 20);
         range(errors, "maSlow", maSlow, 10, 120);
         if (maFast != null && maSlow != null && maSlow < maFast + 3) {
@@ -370,7 +436,9 @@ public class StrategyParams {
             entries.add("MACD " + crossWithinDays + " 日内金叉");
         }
         List<String> exits = new ArrayList<>();
-        exits.add("止损 " + fmt(stopLossPct) + "%");
+        exits.add(atrStop()
+                ? "止损 " + fmt(stopAtrMult) + " 倍 ATR14（按个股波动率，限制在 " + fmt(MIN_STOP_PCT) + "–" + fmt(MAX_STOP_PCT) + "%）"
+                : "止损 " + fmt(stopLossPct) + "%");
         if (trailingStopPct != null && trailingStopPct > 0) {
             exits.add("移动止损（从最高价回撤 " + fmt(trailingStopPct) + "%）");
         }
@@ -385,8 +453,12 @@ public class StrategyParams {
         if (hasCustomExit()) {
             exits.add("自定义离场「" + customExit + "」");
         }
+        String check = CLOSE.equals(exitCheck) ? "价格类离场只在 14:50 按接近收盘价确认（不被盘中插针扫出）"
+                : HALF_THEN_CLOSE.equals(exitCheck) ? "盘中触及先卖一半，14:50 收盘确认再清"
+                        : "价格类离场盘中触及即执行";
         String size = RISK.equals(sizing)
-                ? "按风险定仓位（每笔止损最多亏总资产 " + fmt(riskPerTradePct) + "%），单只≤" + fmt(maxWeightPct) + "%"
+                ? "按风险定仓位（每笔止损最多亏总资产 " + fmt(riskPerTradePct) + "%"
+                        + (atrStop() ? "，止损越宽仓位越小" : "") + "），单只≤" + fmt(maxWeightPct) + "%"
                 : "等权，单只≤" + fmt(maxWeightPct) + "%";
         String filters = usesCustomEntry() ? ""
                 : String.format(Locale.ROOT, "，RSI14 %s–%s，量比≥%s%s", fmt(rsiMin), fmt(rsiMax), fmt(volumeRatioMin),
@@ -394,10 +466,10 @@ public class StrategyParams {
         String pool = autoUniverse()
                 ? "股票池：规则筛选前 " + universeSize + " 只（每月更新）"
                 : "股票池 " + (universe == null ? 0 : universe.size()) + " 只（手选）";
-        return String.format(Locale.ROOT, "%s；入场：%s%s%s；离场：%s；仓位：最多 %d 只，%s", pool,
+        return String.format(Locale.ROOT, "%s；入场：%s%s%s；离场：%s（%s）；仓位：最多 %d 只，%s", pool,
                 String.join(" 或 ", entries), filters,
-                Boolean.TRUE.equals(marketFilter) ? "，上证指数在 MA20 上方" : "", String.join("、", exits), maxPositions,
-                size);
+                Boolean.TRUE.equals(marketFilter) ? "，上证指数在 MA20 上方" : "", String.join("、", exits), check,
+                maxPositions, size);
     }
 
     private static String fmt(Number v) {

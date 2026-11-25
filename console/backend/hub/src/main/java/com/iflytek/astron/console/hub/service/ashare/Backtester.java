@@ -196,6 +196,8 @@ public final class Backtester {
         final double[] priorHigh;
         final double[] dif;
         final double[] dea;
+        /** ATR14, for stops scaled to the stock's own volatility. */
+        final double[] atr;
         /** Custom entry / exit rule values, or {@code null} when not used. */
         final double[] entryRule;
         final double[] exitRule;
@@ -217,6 +219,7 @@ public final class Backtester {
             slow = Indicators.sma(close, p.getMaSlow());
             ma60 = Indicators.sma(close, 60);
             rsi = Indicators.rsi(close, 14);
+            atr = Indicators.atr(bars, 14);
             volRatio = Indicators.volumeRatio(Indicators.volumes(bars), 5);
             priorHigh = new double[bars.size()];
             int n = p.getBreakoutDays();
@@ -316,12 +319,17 @@ public final class Backtester {
      */
     static String exitReason(StrategyParams p, double close, double fast, double slow, double entryPrice,
             int holdDays) {
-        return exitReason(p, close, fast, slow, entryPrice, holdDays, false);
+        return exitReason(p, close, fast, slow, entryPrice, holdDays, false, Double.NaN);
     }
 
     static String exitReason(StrategyParams p, double close, double fast, double slow, double entryPrice,
             int holdDays, boolean customExit) {
-        if (entryPrice > 0 && close <= entryPrice * (1 - p.getStopLossPct() / 100)) {
+        return exitReason(p, close, fast, slow, entryPrice, holdDays, customExit, Double.NaN);
+    }
+
+    static String exitReason(StrategyParams p, double close, double fast, double slow, double entryPrice,
+            int holdDays, boolean customExit, double atr) {
+        if (entryPrice > 0 && close <= stopPrice(p, entryPrice, atr)) {
             return STOP_LOSS;
         }
         if (entryPrice > 0 && close >= entryPrice * (1 + p.getTakeProfitPct() / 100)) {
@@ -362,12 +370,43 @@ public final class Backtester {
      * fixed stop loss and the trailing stop from {@code peak}), the partial take profit (not yet
      * taken), the take profit. A gap through a level fills at the open, otherwise at the level.
      */
+    /**
+     * How far below the entry the stop sits, in percent. In ATR mode the distance is
+     * {@code stopAtrMult} × ATR14, so a volatile stock gets the room its own noise needs and a calm one
+     * is kept tight, bounded by {@link StrategyParams#MIN_STOP_PCT} and
+     * {@link StrategyParams#MAX_STOP_PCT}. Because position size is derived from this distance, a wider
+     * stop buys a smaller position and the risk per trade stays the same. Falls back to
+     * {@code stopLossPct} when the ATR is unavailable, so a missing indicator never removes the stop.
+     */
+    public static double stopDistancePct(StrategyParams p, double entryPrice, double atr) {
+        if (!p.atrStop() || Double.isNaN(atr) || atr <= 0 || entryPrice <= 0) {
+            return p.getStopLossPct();
+        }
+        double pct = p.getStopAtrMult() * atr / entryPrice * 100;
+        return Math.min(StrategyParams.MAX_STOP_PCT, Math.max(StrategyParams.MIN_STOP_PCT, pct));
+    }
+
+    /** The stop price for a position, from {@link #stopDistancePct}. */
+    public static double stopPrice(StrategyParams p, double entryPrice, double atr) {
+        return entryPrice * (1 - stopDistancePct(p, entryPrice, atr) / 100);
+    }
+
     public static PriceExit priceExit(StrategyParams p, double entryPrice, double peak, boolean partialTaken,
             double open, double high, double low) {
+        return priceExit(p, entryPrice, peak, partialTaken, open, high, low, Double.NaN);
+    }
+
+    /**
+     * Where a price-level exit fills and why, or {@code null} for none.
+     *
+     * @param atr ATR14 of the latest completed bar; {@code NaN} keeps the percentage stop
+     */
+    public static PriceExit priceExit(StrategyParams p, double entryPrice, double peak, boolean partialTaken,
+            double open, double high, double low, double atr) {
         if (entryPrice <= 0) {
             return null;
         }
-        double fixed = entryPrice * (1 - p.getStopLossPct() / 100);
+        double fixed = stopPrice(p, entryPrice, atr);
         double trailing = p.getTrailingStopPct() > 0 && peak > 0 ? peak * (1 - p.getTrailingStopPct() / 100) : 0;
         double stop = Math.max(fixed, trailing);
         String stopReason = trailing > fixed ? TRAILING_STOP : STOP_LOSS;
@@ -442,7 +481,7 @@ public final class Backtester {
             return null;
         }
         return exitReason(p, d.close[i], d.fast[i], d.slow[i], entryPrice, holdDays,
-                d.exitRule != null && i >= d.ruleWarmup && RuleExpression.truthy(d.exitRule, i));
+                d.exitRule != null && i >= d.ruleWarmup && RuleExpression.truthy(d.exitRule, i), d.atr[i]);
     }
 
     private static final class Position {
@@ -516,16 +555,26 @@ public final class Backtester {
                     continue;
                 }
                 Bar bar = d.bars.get(i);
-                PriceExit exit = priceExit(p, pos.entryPrice, pos.peak, pos.partialTaken, bar.open(), bar.high(),
-                        bar.low());
+                // With exits confirmed on the close, an intraday touch is ignored (CLOSE) or sells
+                // only half (HALF_THEN_CLOSE); the rest is decided below on the near-final close.
+                PriceExit exit = StrategyParams.CLOSE.equals(p.getExitCheck()) ? null
+                        : priceExit(p, pos.entryPrice, pos.peak, pos.partialTaken, bar.open(), bar.high(), bar.low(),
+                                d.atr[i]);
                 double down = limitDownOf(d, i);
                 if (exit != null && bar.high() > down) {
                     double px = Math.max(down, exit.price() * (1 - AShareRules.SLIPPAGE_VALUE));
-                    if (exit.partial()) {
-                        int half = AShareRules.halfQty(d.code, pos.qty);
-                        pos.partialTaken = true;
-                        if (half > 0) {
-                            cash += sellPart(trades, d, pos, day, px, half, exit.reason());
+                    boolean half = exit.partial() || (p.halfOnTouch() && !exit.partial());
+                    if (half) {
+                        int qty = AShareRules.halfQty(d.code, pos.qty);
+                        if (exit.partial()) {
+                            pos.partialTaken = true;
+                        }
+                        if (qty > 0) {
+                            cash += sellPart(trades, d, pos, day, px, qty, exit.reason());
+                        }
+                        if (pos.qty <= 0) {
+                            it.remove();
+                            continue;
                         }
                     } else {
                         cash += sellPart(trades, d, pos, day, px, pos.qty, exit.reason());
@@ -545,18 +594,42 @@ public final class Backtester {
                 if (i == null || i == 0 || pos.entryCal >= t) {
                     continue;
                 }
-                String reason = exitReason(p, d.close[i], d.fast[i], d.slow[i], pos.entryPrice, t - pos.entryCal,
-                        d.exitRule != null && i >= d.ruleWarmup && RuleExpression.truthy(d.exitRule, i));
-                if (reason == null || STOP_LOSS.equals(reason) || TAKE_PROFIT.equals(reason)) {
-                    // Price levels are handled intraday.
-                    continue;
-                }
+                double close = d.close[i];
                 double down = limitDownOf(d, i);
-                if (d.close[i] <= down) {
+                if (close <= down) {
+                    // Sealed at the limit down: nothing can be sold today.
                     continue;
                 }
-                cash += sellPart(trades, d, pos, day, Math.max(down, d.close[i] * (1 - AShareRules.SLIPPAGE_VALUE)),
-                        pos.qty, reason);
+                double px = Math.max(down, close * (1 - AShareRules.SLIPPAGE_VALUE));
+                // Versions that confirm on the close judge every price level here, on the day's own
+                // close: the stop, the trailing stop and both take-profit levels.
+                if (p.confirmOnClose()) {
+                    PriceExit exit = priceExit(p, pos.entryPrice, pos.peak, pos.partialTaken, close, close, close,
+                            d.atr[i]);
+                    if (exit != null) {
+                        if (exit.partial()) {
+                            int qty = AShareRules.halfQty(d.code, pos.qty);
+                            pos.partialTaken = true;
+                            if (qty > 0) {
+                                cash += sellPart(trades, d, pos, day, px, qty, exit.reason());
+                            }
+                            if (pos.qty <= 0) {
+                                it.remove();
+                            }
+                        } else {
+                            cash += sellPart(trades, d, pos, day, px, pos.qty, exit.reason());
+                            it.remove();
+                        }
+                        continue;
+                    }
+                }
+                String reason = exitReason(p, close, d.fast[i], d.slow[i], pos.entryPrice, t - pos.entryCal,
+                        d.exitRule != null && i >= d.ruleWarmup && RuleExpression.truthy(d.exitRule, i), d.atr[i]);
+                // Price levels were decided above (or intraday), so only the daily rules remain.
+                if (reason == null || STOP_LOSS.equals(reason) || TAKE_PROFIT.equals(reason)) {
+                    continue;
+                }
+                cash += sellPart(trades, d, pos, day, px, pos.qty, reason);
                 it.remove();
             }
             double marketValue = 0;
@@ -573,7 +646,6 @@ public final class Backtester {
             boolean marketOk = market.isEmpty() || market.getOrDefault(day, false);
             Set<String> allowed = monthUniverse == null ? null : monthUniverse.getOrDefault(YearMonth.from(day), Set.of());
             if (slots > 0) {
-                double budget = p.positionBudget(equityBefore);
                 List<Prepared> candidates = new ArrayList<>();
                 for (Prepared d : stocks.values()) {
                     if (held.containsKey(d.code) || (allowed != null && !allowed.contains(d.code))) {
@@ -590,6 +662,8 @@ public final class Backtester {
                         break;
                     }
                     int i = d.index.get(day);
+                    // A wider stop (volatile stock) buys a smaller position, so risk per trade is equal.
+                    double budget = p.positionBudget(equityBefore, stopDistancePct(p, d.close[i], d.atr[i]));
                     double up = AShareRules.limitUp(BigDecimal.valueOf(d.close[i - 1]), d.code, d.name).doubleValue();
                     if (d.close[i] >= up) {
                         continue; // sealed at the limit up

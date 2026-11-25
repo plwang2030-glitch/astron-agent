@@ -868,6 +868,9 @@ public class PaperTradingService {
         StrategyParams params = strategyService.activeParams(uid);
         int version = strategyService.active(uid).getVersion();
         boolean autoTrade = !Objects.equals(account.getAutoTrade(), 0);
+        // This version decides price levels on the near-final close instead, at 14:50: an intraday
+        // dip that reverses must not sell. The peak is still tracked below for the trailing stop.
+        boolean closeOnly = StrategyParams.CLOSE.equals(params.getExitCheck());
         List<PaperOrder> pending = orders(account.getId(), PaperOrder.PENDING, 100);
         int placed = 0;
         for (PaperPosition pos : positions(account.getId())) {
@@ -888,8 +891,12 @@ public class PaperTradingService {
             if (sellable <= 0) {
                 continue;
             }
+            if (closeOnly) {
+                continue;
+            }
             boolean partialTaken = Objects.equals(pos.getPartialTaken(), 1);
-            String reason = riskExit(params, cost, q.price().doubleValue(), peak.doubleValue(), partialTaken, autoTrade);
+            String reason = riskExit(params, cost, q.price().doubleValue(), peak.doubleValue(), partialTaken, autoTrade,
+                    latestAtr(pos.getCode()));
             if (reason == null) {
                 continue;
             }
@@ -900,21 +907,27 @@ public class PaperTradingService {
                         q.price());
                 continue;
             }
-            boolean partial = Backtester.PARTIAL_TAKE_PROFIT.equals(reason);
+            // HALF_THEN_CLOSE sells half on the touch and leaves the rest to the 14:50 confirmation.
+            boolean partial = Backtester.PARTIAL_TAKE_PROFIT.equals(reason) || params.halfOnTouch();
             int qty = partial ? AShareRules.halfQty(pos.getCode(), pos.getQty()) : sellable;
             if (partial && (qty <= 0 || qty > sellable)) {
-                if (qty <= 0) {
+                if (qty <= 0 && Backtester.PARTIAL_TAKE_PROFIT.equals(reason)) {
                     // Too small to split: the rest of the rules (trailing stop, take profit) apply to all of it.
                     markPartialTaken(pos);
+                } else if (qty > sellable) {
+                    // Only part is sellable today (T+1): sell what is allowed.
+                    qty = sellable;
                 }
-                continue;
+                if (qty <= 0) {
+                    continue;
+                }
             }
             try {
                 JSONObject r = place(uid, new PlaceRequest(pos.getCode(), PaperOrder.SELL, qty, null,
                         String.format(Locale.ROOT, "策略 v%d 盘中%s：现价 %s，成本 %.3f，最高 %s", version, reason, q.price(),
                                 cost, peak),
                         null, null, "STRATEGY"));
-                if (partial && PaperOrder.FILLED.equals(r.getString("status"))) {
+                if (Backtester.PARTIAL_TAKE_PROFIT.equals(reason) && PaperOrder.FILLED.equals(r.getString("status"))) {
                     markPartialTaken(pos);
                 }
                 placed++;
@@ -940,13 +953,21 @@ public class PaperTradingService {
      */
     static String riskExit(StrategyParams p, double costPerShare, double price, double peak, boolean partialTaken,
             boolean autoTrade) {
+        return riskExit(p, costPerShare, price, peak, partialTaken, autoTrade, Double.NaN);
+    }
+
+    /**
+     * @param atr ATR14 of the latest completed bar; {@code NaN} keeps the percentage stop
+     */
+    static String riskExit(StrategyParams p, double costPerShare, double price, double peak, boolean partialTaken,
+            boolean autoTrade, double atr) {
         if (costPerShare <= 0) {
             return null;
         }
         if (!autoTrade) {
-            return price <= costPerShare * (1 - p.getStopLossPct() / 100) ? Backtester.STOP_LOSS : null;
+            return price <= Backtester.stopPrice(p, costPerShare, atr) ? Backtester.STOP_LOSS : null;
         }
-        Backtester.PriceExit hit = Backtester.priceExit(p, costPerShare, peak, partialTaken, price, price, price);
+        Backtester.PriceExit hit = Backtester.priceExit(p, costPerShare, peak, partialTaken, price, price, price, atr);
         return hit == null ? null : hit.reason();
     }
 
@@ -983,13 +1004,34 @@ public class PaperTradingService {
             try {
                 Series s = market.dailyBars(pos.getCode(), true, 300);
                 int holdDays = (int) cal.stream().filter(d -> d.isAfter(pos.getFirstBuyDate())).count();
-                String reason = Backtester.latestExit(params, s, pos.getCostAmount().doubleValue() / pos.getQty(),
-                        holdDays, index);
+                double cost = pos.getCostAmount().doubleValue() / pos.getQty();
+                String reason = Backtester.latestExit(params, s, cost, holdDays, index);
+                // Versions that confirm price levels on the close decide them here, on the near-final
+                // close, instead of the moment the price touched them during the day.
+                if (reason == null && params.confirmOnClose() && !s.bars().isEmpty()) {
+                    double close = s.bars().get(s.bars().size() - 1).close();
+                    BigDecimal peak = pos.getPeakPrice();
+                    Backtester.PriceExit exit = Backtester.priceExit(params, cost,
+                            peak == null ? cost : peak.doubleValue(), Objects.equals(pos.getPartialTaken(), 1),
+                            close, close, close, latestAtr(pos.getCode()));
+                    reason = exit == null ? null : exit.reason();
+                    if (exit != null && Backtester.PARTIAL_TAKE_PROFIT.equals(exit.reason())) {
+                        int half = AShareRules.halfQty(pos.getCode(), pos.getQty());
+                        qty = Math.min(qty, Math.max(0, half));
+                        if (qty <= 0) {
+                            continue;
+                        }
+                    }
+                }
                 if (reason == null) {
                     continue;
                 }
-                place(uid, new PlaceRequest(pos.getCode(), PaperOrder.SELL, qty, null,
-                        "策略 v" + version + " 尾盘离场：" + reason, null, null, "STRATEGY"));
+                JSONObject sold = place(uid, new PlaceRequest(pos.getCode(), PaperOrder.SELL, qty, null,
+                        "策略 v" + version + " 尾盘" + reason + "：收盘确认", null, null, "STRATEGY"));
+                if (Backtester.PARTIAL_TAKE_PROFIT.equals(reason)
+                        && PaperOrder.FILLED.equals(sold.getString("status"))) {
+                    markPartialTaken(pos);
+                }
                 exits++;
             } catch (RuntimeException e) {
                 log.warn("Strategy exit skipped, uid={}, code={}, errorType={}, msg={}", uid, pos.getCode(),
@@ -1044,7 +1086,6 @@ public class PaperTradingService {
         }
         signals.sort((a, b) -> Double.compare(b.getDoubleValue("volumeRatio"), a.getDoubleValue("volumeRatio")));
         double equity = portfolio(uid).getBigDecimal("totalAssets").doubleValue();
-        double budget = params.positionBudget(equity);
         int placed = 0;
         List<String> watchNotes = new ArrayList<>();
         for (JSONObject s : signals) {
@@ -1069,6 +1110,9 @@ public class PaperTradingService {
                     continue;
                 }
                 BigDecimal reserve = AShareRules.buyFillPrice(q.price(), null);
+                // A wider stop (volatile stock) buys a smaller position, so risk per trade is equal.
+                double budget = params.positionBudget(equity,
+                        Backtester.stopDistancePct(params, q.price().doubleValue(), latestAtr(code)));
                 int qty = entryQty(code, q.price().doubleValue(), reserve.doubleValue(), budget,
                         account(uid).getCash().doubleValue());
                 if (qty <= 0) {
@@ -1151,6 +1195,26 @@ public class PaperTradingService {
     // ------------------------------------------------------------------ watchlist
 
     public static final int MAX_WATCHLIST = 20;
+
+    /**
+     * ATR14 of the stock's latest completed daily bar, for a stop scaled to its own volatility.
+     * {@code NaN} when the bars are unavailable, which makes the stop fall back to the percentage rule
+     * rather than disappear.
+     */
+    double latestAtr(String code) {
+        try {
+            List<Bar> bars = market.dailyBars(code, true, 120).bars();
+            if (bars.size() < 20) {
+                return Double.NaN;
+            }
+            double[] atr = Indicators.atr(bars, 14);
+            double v = atr[atr.length - 1];
+            return Double.isNaN(v) || v <= 0 ? Double.NaN : v;
+        } catch (RuntimeException e) {
+            log.info("ATR unavailable, code={}, msg={}", code, e.getMessage());
+            return Double.NaN;
+        }
+    }
 
     /** Watchlist signals are bought automatically (auto-trading and watchlist auto-buy both on). */
     public boolean watchlistAutoBuy(String uid) {

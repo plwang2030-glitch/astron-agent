@@ -80,6 +80,21 @@ public final class Indicators {
     }
 
     /** Today's volume over the average of the previous {@code n} days. */
+    /**
+     * Average True Range over {@code n} bars: how far the stock typically moves in a day, including
+     * overnight gaps. Used to size a stop against the stock's own noise rather than a flat percentage.
+     */
+    public static double[] atr(List<Bar> bars, int n) {
+        double[] tr = new double[bars.size()];
+        for (int i = 0; i < tr.length; i++) {
+            Bar b = bars.get(i);
+            double prevClose = i == 0 ? b.close() : bars.get(i - 1).close();
+            tr[i] = Math.max(b.high() - b.low(),
+                    Math.max(Math.abs(b.high() - prevClose), Math.abs(b.low() - prevClose)));
+        }
+        return sma(tr, n);
+    }
+
     public static double[] volumeRatio(double[] vol, int n) {
         double[] out = nanArray(vol.length);
         double sum = 0;

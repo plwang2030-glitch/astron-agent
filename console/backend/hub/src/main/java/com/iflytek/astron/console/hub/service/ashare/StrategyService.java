@@ -726,6 +726,19 @@ public class StrategyService {
         step(out, "maxPositions", p.getMaxPositions(), 1);
         step(out, "maxWeightPct", p.getMaxWeightPct(), 5);
         step(out, "riskPerTradePct", p.getRiskPerTradePct(), 0.5);
+        // Noise handling: how wide the stop is relative to the stock's own volatility, and whether a
+        // price level is acted on the moment it is touched or only once the close confirms it.
+        step(out, "stopAtrMult", p.getStopAtrMult(), 0.5);
+        for (String mode : List.of(StrategyParams.PCT, StrategyParams.ATR)) {
+            if (!mode.equals(p.getStopMode())) {
+                out.add(new JSONObject().fluentPut("stopMode", mode));
+            }
+        }
+        for (String check : List.of(StrategyParams.INTRADAY, StrategyParams.CLOSE, StrategyParams.HALF_THEN_CLOSE)) {
+            if (!check.equals(p.getExitCheck())) {
+                out.add(new JSONObject().fluentPut("exitCheck", check));
+            }
+        }
         options(out, "trailingStopPct", p.getTrailingStopPct(), 0.0, 6.0, 10.0, 15.0);
         options(out, "partialTakeProfitPct", p.getPartialTakeProfitPct(), 0.0, 8.0, 12.0);
         List<String> types = new ArrayList<>(List.of(StrategyParams.MA_CROSS, StrategyParams.BREAKOUT,

@@ -125,6 +125,13 @@ public class AShareController {
         });
     }
 
+    @PostMapping("/strategy/backtest")
+    @Operation(summary = "Backtest the active version, or the active version with a patch applied")
+    public ApiResult<JSONObject> backtest(@RequestBody(required = false) JSONObject patch) {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> strategyService.backtest(uid, patch));
+    }
+
     @PostMapping("/strategy/search")
     @Operation(summary = "Run the automatic strategy search now")
     public ApiResult<JSONObject> searchStrategy() {

@@ -405,6 +405,8 @@ public class AShareToolFactory {
             + "current：当前版本、参数和前进测试中的候选；scan：股票池里今天触发入场信号的股票；universe：股票池的筛选规则、本月名单（含成交额/市值）和每月进出变化（股票池由规则每月筛选，不能手工指定）；backtest：回测当前版本或试算改动（params，不保存，返回闸门对比 gateCheck）；"
             + "propose：提交改动（params + rationale），先过回测闸门（4 年历史、按当月时点的规则股票池、样本外夏普显著提升、6 个窗口、上涨/下跌/震荡阶段、前 100 只扩展验证池），"
             + "通过后进入 10 个交易日前进测试，不差于当前版本才正式采纳；search：自动进化搜索（约 24 个候选）；rollback：回滚到采纳过的版本；history：版本记录。"
+            + "处理短线噪音：固定百分比止损对高波动股可能只相当于 1 倍 ATR（一天的正常波动），容易被盘中插针扫出；可提案 stopMode=ATR 让止损按个股波动率自动放宽（仓位会随之变小，风险不增加），"
+            + "或 exitCheck=CLOSE / HALF_THEN_CLOSE 用收盘价确认离场。是否采纳由闸门用数据决定。"
             + "自定义规则语法：序列 open high low close volume index；函数 ma ema rsi highest lowest ref std roc(x,n)、atr(n)、volratio(n)、macd_dif() macd_dea()、"
             + "cross_up(a,b) cross_down(a,b)、abs min max；运算 + - * / > < >= <= and or not。highest/lowest 取当前之前 n 根。"
             + "例：均值回归入场 rsi(close,6) < 25 and close > ma(close,120)；ATR 突破 close > highest(high,20) and close - ref(close,1) > atr(14)。";
@@ -412,7 +414,7 @@ public class AShareToolFactory {
             """
                     {"type":"object","properties":{
                     "action":{"type":"string","enum":["current","scan","universe","backtest","propose","search","rollback","history"]},
-                    "params":{"type":"object","description":"只写要改的字段。入场：entryType(MA_CROSS 均线金叉 / BREAKOUT N日新高突破 / MACD 金叉 / ANY 任一)、maFast(3–20)、maSlow(10–120)、crossWithinDays(1–20)、breakoutDays(10–60)、rsiMin(10–60)、rsiMax(50–90)、volumeRatioMin(0.5–3)、requireAboveMa60、marketFilter(上证在 MA20 上方才买)、entryType=CUSTOM 时用 customEntry(规则表达式，替代内置信号和 RSI/量比/MA60 过滤)；仓位：sizing(EQUAL 等权 / RISK 按风险)、riskPerTradePct(0.3–3，止损时最多亏总资产的百分比)、maxPositions(1–10)、maxWeightPct(5–50)；离场：stopLossPct(3–20)、trailingStopPct(0 关闭或 3–25，从最高价回撤)、partialTakeProfitPct(0 关闭或 3–40，先卖一半)、takeProfitPct(5–60)、maxHoldDays(3–120)、exitOnMaCrossDown、customExit(收盘检查的额外离场规则表达式，空字符串关闭)；股票池：universeSize(10–50，规则筛选结果取前几只)"},
+                    "params":{"type":"object","description":"只写要改的字段。入场：entryType(MA_CROSS 均线金叉 / BREAKOUT N日新高突破 / MACD 金叉 / ANY 任一)、maFast(3–20)、maSlow(10–120)、crossWithinDays(1–20)、breakoutDays(10–60)、rsiMin(10–60)、rsiMax(50–90)、volumeRatioMin(0.5–3)、requireAboveMa60、marketFilter(上证在 MA20 上方才买)、entryType=CUSTOM 时用 customEntry(规则表达式，替代内置信号和 RSI/量比/MA60 过滤)；仓位：sizing(EQUAL 等权 / RISK 按风险)、riskPerTradePct(0.3–3，止损时最多亏总资产的百分比)、maxPositions(1–10)、maxWeightPct(5–50)；离场：stopMode(PCT 固定百分比 / ATR 按个股波动率)、stopAtrMult(1–5，ATR 模式下止损为成本减 N 倍 ATR14)、stopLossPct(3–20，同时作为最大亏损上限)、exitCheck(INTRADAY 盘中触及即卖 / CLOSE 只在 14:50 按接近收盘价确认 / HALF_THEN_CLOSE 盘中触及先卖一半、收盘确认再清)、trailingStopPct(0 关闭或 3–25，从最高价回撤)、partialTakeProfitPct(0 关闭或 3–40，先卖一半)、takeProfitPct(5–60)、maxHoldDays(3–120)、exitOnMaCrossDown、customExit(收盘检查的额外离场规则表达式，空字符串关闭)；股票池：universeSize(10–50，规则筛选结果取前几只)"},
                     "rationale":{"type":"string","description":"propose 必填：依据哪些复盘结论、经验 #id 或回测现象"},
                     "version":{"type":"integer","description":"rollback：目标版本"},
                     "reason":{"type":"string","description":"rollback：原因"}
