@@ -33,15 +33,22 @@ import {
   AShareSettings,
   AShareStrategy,
   AShareStrategyVersion,
+  AShareMarketOverview,
+  AShareSignal,
+  AShareSignalGroup,
+  AShareSignalsResponse,
   AShareUniverse,
   AShareWatchlist,
   addAShareWatch,
+  evaluateAShareSignals,
   getAShareLessons,
   getAShareOrders,
   getAShareOverview,
   getAShareReports,
   getAShareSettings,
   getAShareStrategy,
+  getAShareMarket,
+  getAShareSignals,
   getAShareUniverse,
   getAShareWatchlist,
   refreshAShareUniverse,
@@ -109,6 +116,34 @@ const VERSION_STATUS: Record<
   TRIAL: { text: '前进测试中', color: 'orange' },
 };
 
+const SIGNAL_ACTION: Record<string, { text: string; color: string }> = {
+  BUY: { text: '买入', color: 'red' },
+  ADD: { text: '加仓', color: 'red' },
+  HOLD: { text: '持有', color: 'orange' },
+  WATCH: { text: '观望', color: 'default' },
+  REDUCE: { text: '减仓', color: 'green' },
+  SELL: { text: '卖出', color: 'green' },
+  AVOID: { text: '回避', color: 'green' },
+  ALERT: { text: '风险预警', color: 'volcano' },
+};
+
+const SIGNAL_STATUS: Record<string, { text: string; color: string }> = {
+  PENDING: { text: '待评估', color: 'processing' },
+  HIT: { text: '命中', color: 'success' },
+  MISS: { text: '未命中', color: 'error' },
+  UNABLE: { text: '不计入', color: 'default' },
+  SUPERSEDED: { text: '已被覆盖', color: 'default' },
+};
+
+const QUALITY_LABEL: Record<string, string> = {
+  GOOD: '好',
+  FAIR: '一般',
+  POOR: '差',
+  COMPLETE: '完整',
+  PARTIAL: '部分',
+  MINIMAL: '简略',
+};
+
 const REVIEW_TYPE: Record<AShareReviewType, string> = {
   PRE_OPEN: '盘前计划',
   CLOSE: '收盘复盘',
@@ -171,6 +206,44 @@ const AShareTradingPage = (): React.ReactElement => {
   const [watchlist, setWatchlist] = useState<AShareWatchlist | null>(null);
   const [watchInput, setWatchInput] = useState('');
   const [watchSaving, setWatchSaving] = useState(false);
+  const [signals, setSignals] = useState<AShareSignalsResponse | null>(null);
+  const [signalStatus, setSignalStatus] = useState<string | undefined>();
+  const [evaluating, setEvaluating] = useState(false);
+  const [marketOverview, setMarketOverview] =
+    useState<AShareMarketOverview | null>(null);
+
+  const loadSignals = useCallback(async (status?: string) => {
+    try {
+      setSignals(await getAShareSignals(status));
+    } catch {
+      // http 已提示错误
+    }
+  }, []);
+
+  const loadMarket = useCallback(async () => {
+    try {
+      setMarketOverview(await getAShareMarket());
+    } catch {
+      // http 已提示错误
+    }
+  }, []);
+
+  const handleEvaluate = async (): Promise<void> => {
+    setEvaluating(true);
+    try {
+      const r = await evaluateAShareSignals();
+      message.success(
+        r.hit + r.miss + r.unable > 0
+          ? `已评估：命中 ${r.hit}，未命中 ${r.miss}，不计入 ${r.unable}`
+          : `${r.waiting} 条还没到评估周期`
+      );
+      await Promise.all([loadSignals(signalStatus), loadLessons(lessonKind)]);
+    } catch {
+      // http 已提示错误
+    } finally {
+      setEvaluating(false);
+    }
+  };
 
   const loadWatchlist = useCallback(async () => {
     try {
@@ -265,9 +338,14 @@ const AShareTradingPage = (): React.ReactElement => {
       loadReports(reportType),
       loadUniverse(),
       loadWatchlist(),
+      loadSignals(signalStatus),
+      loadMarket(),
     ]);
   }, [
     loadWatchlist,
+    loadSignals,
+    loadMarket,
+    signalStatus,
     loadOrders,
     loadLessons,
     loadReports,
@@ -978,6 +1056,222 @@ const AShareTradingPage = (): React.ReactElement => {
       ),
     },
     {
+      key: 'signals',
+      label: `建议后验${signals?.stats?.evaluated ? `（${signals.stats.evaluated}）` : ''}`,
+      children: signals ? (
+        <>
+          <div className="mb-4 rounded-lg border border-[#e5e7eb] bg-white p-5">
+            <div className="mb-2 text-base font-medium text-[#202124]">
+              智能体建议的命中率
+            </div>
+            <div className="text-sm leading-6 text-[#374151]">
+              已评估 {signals.stats.evaluated} 条，待评估{' '}
+              {signals.stats.pending} 条，不计入 {signals.stats.unable} 条
+              {signals.stats.evaluated > 0 && (
+                <>
+                  ；命中率{' '}
+                  <span className="font-medium">
+                    {signals.stats.overall.hitRatePct}%
+                  </span>
+                  ，平均 {pct(signals.stats.overall.avgReturnPct)}
+                  ，平均最大逆向波动 {signals.stats.overall.avgMaxAdversePct}%
+                </>
+              )}
+              {!signals.stats.overall.enough && (
+                <Tag color="gold" className="ml-2">
+                  样本不足 {signals.stats.minSample} 条，仅供观察
+                </Tag>
+              )}
+            </div>
+            <div className="mt-2 text-xs leading-5 text-[#9ca3af]">
+              {signals.stats.rule}
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={handleEvaluate}
+                loading={evaluating}
+              >
+                立即评估到期建议
+              </Button>
+              <span className="text-xs text-[#9ca3af]">
+                每个交易日 15:25
+                自动评估，并把结果写入「交易经验」里的进化记录。
+              </span>
+            </div>
+          </div>
+          <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {(
+              [
+                ['按动作', signals.stats.byAction],
+                ['按周期', signals.stats.byHorizon],
+                ['按数据质量', signals.stats.byDataQuality],
+                ['按计划完整度', signals.stats.byPlanQuality],
+              ] as [string, AShareSignalGroup[]][]
+            ).map(([title, groups]) => (
+              <div
+                key={title}
+                className="rounded-lg border border-[#e5e7eb] bg-white p-4"
+              >
+                <div className="mb-2 text-sm font-medium text-[#202124]">
+                  {title}
+                </div>
+                {groups.length === 0 ? (
+                  <div className="text-xs text-[#9ca3af]">
+                    还没有已评估的建议
+                  </div>
+                ) : (
+                  <Table
+                    rowKey="key"
+                    size="small"
+                    pagination={false}
+                    dataSource={groups}
+                    columns={[
+                      {
+                        title: '分组',
+                        dataIndex: 'key',
+                        render: (v: string) =>
+                          SIGNAL_ACTION[v]?.text || QUALITY_LABEL[v] || v,
+                      },
+                      { title: '样本', dataIndex: 'samples', width: 70 },
+                      {
+                        title: '命中率',
+                        key: 'hit',
+                        width: 150,
+                        render: (_, r) => (
+                          <span>
+                            {r.hitRatePct ?? '-'}%
+                            {!r.enough && (
+                              <Tooltip title={r.note}>
+                                <Tag className="ml-1">样本少</Tag>
+                              </Tooltip>
+                            )}
+                          </span>
+                        ),
+                      },
+                      {
+                        title: '平均收益',
+                        dataIndex: 'avgReturnPct',
+                        width: 90,
+                        render: v => pct(v),
+                      },
+                    ]}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mb-3 flex items-center gap-3">
+            <Select
+              allowClear
+              size="small"
+              className="w-[140px]"
+              placeholder="全部状态"
+              value={signalStatus}
+              onChange={v => {
+                setSignalStatus(v);
+                loadSignals(v);
+              }}
+              options={Object.entries(SIGNAL_STATUS).map(([k, v]) => ({
+                value: k,
+                label: v.text,
+              }))}
+            />
+          </div>
+          <Table
+            rowKey="signalId"
+            size="middle"
+            dataSource={signals.signals}
+            pagination={{ pageSize: 10 }}
+            locale={{ emptyText: '还没有留痕的建议' }}
+            expandable={{
+              rowExpandable: r => Boolean(r.reason || r.risk || r.watch),
+              expandedRowRender: r => (
+                <div className="space-y-1 text-xs leading-5 text-[#374151]">
+                  <div>依据：{r.reason || '-'}</div>
+                  {r.risk && <div>风险：{r.risk}</div>}
+                  {r.watch && <div>观察/失效条件：{r.watch}</div>}
+                  {r.outcome?.detail && (
+                    <div className="text-[#6b7280]">
+                      评估：{r.outcome.detail}
+                    </div>
+                  )}
+                </div>
+              ),
+            }}
+            columns={[
+              {
+                title: '股票',
+                key: 'stock',
+                width: 150,
+                render: (_, r: AShareSignal) => (
+                  <span>
+                    {r.name || r.code}
+                    <span className="ml-1 text-xs text-[#9ca3af]">
+                      {r.code}
+                    </span>
+                  </span>
+                ),
+              },
+              {
+                title: '建议',
+                key: 'action',
+                width: 150,
+                render: (_, r) => (
+                  <span>
+                    <Tag color={SIGNAL_ACTION[r.action]?.color}>
+                      {SIGNAL_ACTION[r.action]?.text || r.action}
+                    </Tag>
+                    <span className="text-xs text-[#6b7280]">{r.horizon}</span>
+                  </span>
+                ),
+              },
+              {
+                title: '锚定（已收盘价）',
+                key: 'anchor',
+                width: 160,
+                render: (_, r) =>
+                  `${r.anchorDate ?? '-'} @${r.anchorPrice ?? '-'}`,
+              },
+              {
+                title: '结果',
+                key: 'result',
+                width: 190,
+                render: (_, r) => (
+                  <span>
+                    <Tag color={SIGNAL_STATUS[r.status]?.color}>
+                      {SIGNAL_STATUS[r.status]?.text || r.status}
+                    </Tag>
+                    {r.outcome?.returnPct !== undefined && (
+                      <span className={pnlColor(r.outcome.returnPct)}>
+                        {pct(r.outcome.returnPct)}
+                      </span>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                title: '记录时',
+                key: 'meta',
+                render: (_, r) => (
+                  <span className="text-xs text-[#6b7280]">
+                    数据质量 {QUALITY_LABEL[r.dataQuality ?? ''] ?? '-'}，计划{' '}
+                    {QUALITY_LABEL[r.planQuality ?? ''] ?? '-'}，
+                    {r.source === 'REVIEW' ? '复盘' : '对话'}
+                    {r.confidence !== undefined &&
+                      r.confidence !== null &&
+                      `，置信 ${r.confidence}`}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </>
+      ) : (
+        <Empty />
+      ),
+    },
+    {
       key: 'watchlist',
       label: `自选${watchlist?.stocks?.length ? `（${watchlist.stocks.length}）` : ''}`,
       children: (
@@ -1390,6 +1684,22 @@ const AShareTradingPage = (): React.ReactElement => {
                 {settings.tradingNow ? '交易中 · 盯盘运行' : '休市 · 不盯盘'}
               </Tag>
             )}
+            {marketOverview && (
+              <Tag color="blue">{marketOverview.marketPhaseLabel}</Tag>
+            )}
+            {marketOverview && marketOverview.dataQuality.level !== 'GOOD' && (
+              <Tooltip
+                title={
+                  marketOverview.dataQuality.limitations.join('；') ||
+                  marketOverview.rule
+                }
+              >
+                <Tag color="gold">
+                  数据质量 {marketOverview.dataQuality.score} 分（
+                  {marketOverview.dataQuality.levelLabel}）
+                </Tag>
+              </Tooltip>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1473,6 +1783,50 @@ const AShareTradingPage = (): React.ReactElement => {
           />
         </div>
         <div className="rounded-lg border border-[#e5e7eb] bg-white px-5 pb-5 pt-2 shadow-sm">
+          {marketOverview && (
+            <div className="mb-4 rounded-lg border border-[#e5e7eb] bg-white px-5 py-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                {marketOverview.indices.map(i => (
+                  <span key={i.name}>
+                    <span className="text-[#6b7280]">{i.name}</span>{' '}
+                    <span className={pnlColor(i.pctChg)}>
+                      {i.price ?? '-'}（{pct(i.pctChg)}）
+                    </span>
+                  </span>
+                ))}
+              </div>
+              {marketOverview.breadth?.advances !== undefined && (
+                <div className="mt-2 text-xs leading-5 text-[#6b7280]">
+                  市场宽度：上涨 {marketOverview.breadth.advances} 家，下跌{' '}
+                  {marketOverview.breadth.declines} 家
+                  {marketOverview.breadth.limitUp !== undefined &&
+                    `；涨停 ${marketOverview.breadth.limitUp} 家，跌停 ${marketOverview.breadth.limitDown} 家`}
+                  {Boolean(marketOverview.breadth.brokenLimitUp) &&
+                    `，炸板 ${marketOverview.breadth.brokenLimitUp} 家`}
+                </div>
+              )}
+              {Boolean(marketOverview.industryLeaders?.length) && (
+                <div className="mt-1 text-xs leading-5 text-[#6b7280]">
+                  领涨行业：
+                  {marketOverview.industryLeaders
+                    ?.map(x => `${x.name} ${pct(x.pctChg)}`)
+                    .join('、')}
+                  ；领跌：
+                  {marketOverview.industryLaggards
+                    ?.map(x => `${x.name} ${pct(x.pctChg)}`)
+                    .join('、')}
+                </div>
+              )}
+              {Boolean(marketOverview.hotConcepts?.length) && (
+                <div className="mt-1 text-xs leading-5 text-[#6b7280]">
+                  热门概念：
+                  {marketOverview.hotConcepts
+                    ?.map(x => `${x.name} ${pct(x.pctChg)}`)
+                    .join('、')}
+                </div>
+              )}
+            </div>
+          )}
           <Tabs items={tabs} />
         </div>
       </Spin>

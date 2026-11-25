@@ -56,6 +56,9 @@ public class AShareToolFactory {
     private final LessonService lessonService;
     private final StrategyService strategyService;
     private final AShareContextService contextService;
+    private final MarketPackService packService;
+    private final MarketExtras extras;
+    private final DecisionSignalService signalService;
 
     public List<ToolCallback> create(ChatToolContext context) {
         return List.of(
@@ -63,7 +66,10 @@ public class AShareToolFactory {
                 new AShareTool("paper_trade", "模拟交易", TRADE_DESC, TRADE_SCHEMA, context, this::trade, this::afterCall),
                 new AShareTool("trading_lessons", "交易经验", LESSON_DESC, LESSON_SCHEMA, context, this::lessons, this::afterCall),
                 new AShareTool("strategy_evolve", "策略进化", STRATEGY_DESC, STRATEGY_SCHEMA, context,
-                        this::strategy, this::afterCall));
+                        this::strategy, this::afterCall),
+                // The recording agent is part of the evidence, so the signal tool closes over the context.
+                new AShareTool("decision_signal", "建议留痕", SIGNAL_DESC, SIGNAL_SCHEMA, context,
+                        (uid, args) -> signal(uid, args, context.getBotId()), this::afterCall));
     }
 
     /** The first agent a user trades with becomes the default daily review agent. */
@@ -81,11 +87,15 @@ public class AShareToolFactory {
 
     // ------------------------------------------------------------------ a_share_market
 
-    private static final String MARKET_DESC = "查询沪深 A 股行情（东方财富公开数据）。quote：实时报价与估值（codes，最多 10 个）；"
-            + "kline：日 K 线与技术指标（code、days，前复权）；search：按名称/拼音/代码找股票（keyword）；index：主要指数。";
+    private static final String MARKET_DESC = "查询沪深 A 股行情与市场数据（东方财富、新浪公开接口）。quote：实时报价与估值（codes，最多 10 个）；"
+            + "kline：日 K 线与技术指标（code、days，前复权）；search：按名称/拼音/代码找股票（keyword）；index：主要指数；"
+            + "pack：一次拿到某只股票的报价、指标、资金流向、所属行业/概念、最近公告、龙虎榜和数据质量标注（code，推荐分析个股时先调这个）；"
+            + "market：大盘状态——指数、涨跌家数、涨停跌停数、领涨领跌行业与热门概念（大盘复盘和盘前计划先调这个）；"
+            + "flow：个股逐日资金流向（code、days，主力=大单+超大单净额）；boards：个股所属行业与概念；announcements：个股最近公告（code）；"
+            + "lhb：个股龙虎榜（code）。返回里带 dataQuality 和 marketPhase 时，必须按其中的 limitations 和 rule 约束结论。";
     private static final String MARKET_SCHEMA = """
             {"type":"object","properties":{
-            "action":{"type":"string","enum":["quote","kline","search","index"]},
+            "action":{"type":"string","enum":["quote","kline","search","index","pack","market","flow","boards","announcements","lhb"]},
             "codes":{"type":"array","items":{"type":"string"},"description":"quote：6 位股票代码"},
             "code":{"type":"string","description":"kline：6 位股票代码"},
             "days":{"type":"integer","description":"kline：返回最近多少个交易日的 K 线，默认 20，最多 120（指标总用更长的历史计算）"},
@@ -148,7 +158,48 @@ public class AShareToolFactory {
                 }
                 return out;
             }
-            default -> throw new IllegalArgumentException("action 只能是 quote / kline / search / index");
+            case "pack" -> {
+                return packService.stock(args.getString("code"), true).toJson();
+            }
+            case "market" -> {
+                return packService.overview().toJson();
+            }
+            case "flow" -> {
+                String code = AShareRules.normalizeCode(args.getString("code"));
+                int days = Math.max(3, Math.min(60, args.getIntValue("days", 10)));
+                List<MarketExtras.FlowDay> flow = extras.flow(code, days);
+                JSONArray rows = new JSONArray();
+                flow.forEach(f -> rows.add(f.toJson()));
+                Double main5 = MarketExtras.mainNetSum(flow, 5);
+                return new JSONObject()
+                        .fluentPut("code", code)
+                        .fluentPut("unit", "亿元，正为净流入")
+                        .fluentPut("main5dYi", main5 == null ? null : Math.round(main5 / 1e6) / 100.0)
+                        .fluentPut("days", rows)
+                        .fluentPut("note", flow.isEmpty() ? "资金流向接口暂时取不到，不要据此下结论"
+                                : "main 为大单+超大单净额（主力），retail 为中小单净额。");
+            }
+            case "boards" -> {
+                return extras.boards(args.getString("code"))
+                        .toJson()
+                        .fluentPut("code", AShareRules.normalizeCode(args.getString("code")));
+            }
+            case "announcements" -> {
+                JSONArray rows = new JSONArray();
+                extras.announcements(args.getString("code"), 8).forEach(a -> rows.add(a.toJson()));
+                return new JSONObject().fluentPut("code", AShareRules.normalizeCode(args.getString("code")))
+                        .fluentPut("announcements", rows)
+                        .fluentPut("note", rows.isEmpty() ? "公告接口没有返回内容（可能近期无公告或接口不可用）" : null);
+            }
+            case "lhb" -> {
+                JSONArray rows = new JSONArray();
+                extras.dragonTiger(args.getString("code"), 5).forEach(l -> rows.add(l.toJson()));
+                return new JSONObject().fluentPut("code", AShareRules.normalizeCode(args.getString("code")))
+                        .fluentPut("dragonTiger", rows)
+                        .fluentPut("note", rows.isEmpty() ? "近期没有上龙虎榜，或接口不可用" : "net 为龙虎榜净买入额（亿元）。");
+            }
+            default -> throw new IllegalArgumentException(
+                    "action 只能是 quote / kline / search / index / pack / market / flow / boards / announcements / lhb");
         }
     }
 
@@ -292,6 +343,46 @@ public class AShareToolFactory {
             }
             case "retire" -> lessonJson(lessonService.retire(uid, args.getLong("lessonId")));
             default -> throw new IllegalArgumentException("action 只能是 list / add / feedback / retire");
+        };
+    }
+
+    // ------------------------------------------------------------------ decision_signal
+
+    private static final String SIGNAL_DESC = "给出可被检验的买卖建议并留痕。你每次对某只股票给出明确判断（买入/加仓/持有/观望/减仓/卖出/回避/风险预警），"
+            + "都要用 record 记下来：系统会以「记录时最后一个已收盘交易日的前复权收盘价」为锚定价，在 1/3/5/10 个交易日后自动对照实际走势判定命中或未命中，"
+            + "并按动作、周期、市场时点、数据质量分组统计命中率。这让你的分析能力和量化策略一样有证据、能进化。"
+            + "record：记录一条建议（code、action、horizon、reason 必填；建议同时写 entryLow/entryHigh、stopLoss、targetPrice、watch，计划越完整越好）；"
+            + "stats：你的历史命中率与分组统计（提建议前先看，知道自己哪类判断准）；list：建议与评估结果（可按 status/code 过滤）。"
+            + "判定口径：中性带 ±2%，看多需涨 ≥2%，看空/回避需涨幅 ≤2%，持有需跌幅 <2%；WATCH / ALERT 只留痕不计命中率。样本少于 30 条不能当作结论。";
+    private static final String SIGNAL_SCHEMA = """
+            {"type":"object","properties":{
+            "action":{"type":"string","enum":["record","stats","list"]},
+            "code":{"type":"string","description":"record 必填；list 可选：6 位股票代码"},
+            "advice":{"type":"string","enum":["BUY","ADD","HOLD","WATCH","REDUCE","SELL","AVOID","ALERT"],"description":"record 必填：建议动作"},
+            "horizon":{"type":"string","enum":["1d","3d","5d","10d"],"description":"record：评估周期（交易日），默认 5d"},
+            "confidence":{"type":"number","description":"record 可选：0–1 的置信度"},
+            "entryLow":{"type":"number","description":"record 可选：理想买入价下限"},
+            "entryHigh":{"type":"number","description":"record 可选：理想买入价上限"},
+            "stopLoss":{"type":"number","description":"record 可选：止损价"},
+            "targetPrice":{"type":"number","description":"record 可选：目标价"},
+            "reason":{"type":"string","description":"record 必填：至少 10 字，写清技术面/资金面/消息面依据或引用的经验 #id"},
+            "risk":{"type":"string","description":"record 可选：主要风险"},
+            "watch":{"type":"string","description":"record 可选：需要观察什么、什么情况下判断失效"},
+            "status":{"type":"string","enum":["PENDING","HIT","MISS","UNABLE","SUPERSEDED"],"description":"list 可选：按状态过滤"}
+            },"required":["action"]}""";
+
+    private Object signal(String uid, JSONObject args, Integer botId) {
+        String action = action(args);
+        return switch (action) {
+            case "record" -> signalService.record(uid, new DecisionSignalService.SignalRequest(
+                    args.getString("code"), args.getString("advice"), args.getString("horizon"),
+                    args.getDouble("confidence"), args.getBigDecimal("entryLow"), args.getBigDecimal("entryHigh"),
+                    args.getBigDecimal("stopLoss"), args.getBigDecimal("targetPrice"), args.getString("reason"),
+                    args.getString("risk"), args.getString("watch"), null, botId, null))
+                    .fluentPut("disclaimer", DISCLAIMER);
+            case "stats" -> signalService.stats(uid);
+            case "list" -> signalService.list(uid, args.getString("status"), args.getString("code"), 20);
+            default -> throw new IllegalArgumentException("action 只能是 record / stats / list");
         };
     }
 

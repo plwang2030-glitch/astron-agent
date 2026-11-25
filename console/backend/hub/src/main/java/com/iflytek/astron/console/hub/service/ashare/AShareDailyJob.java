@@ -30,6 +30,8 @@ import java.util.UUID;
  * <li>15:10 day orders expire and the day's account value is saved.</li>
  * <li>15:12 the rule-based universe's bars are topped up (in the background, about ten minutes);
  * the first run of a month saves the month's universe.</li>
+ * <li>15:25 the agents' recorded opinions whose window has passed are scored against what actually
+ * happened, and the result is written into the lesson book.</li>
  * <li>15:30 收盘复盘; 16:00 on the last trading day of the week: automatic strategy search, then 周复盘;
  * of the month: automatic rollback check, then 月复盘.</li>
  * </ul>
@@ -47,6 +49,7 @@ public class AShareDailyJob {
     private final AShareReviewService reviewService;
     private final AutoEvolutionService autoEvolutionService;
     private final UniverseService universeService;
+    private final DecisionSignalService signalService;
     private final RedisUtil redisUtil;
 
     @Scheduled(cron = "${astron.ashare.job.pre-open-cron:0 26 9 * * MON-FRI}", zone = "Asia/Shanghai")
@@ -131,6 +134,25 @@ public class AShareDailyJob {
             }
             boolean started = universeService.maintainAsync("daily");
             log.info("A-share universe maintenance {}", started ? "started" : "skipped: already running");
+        });
+    }
+
+    /**
+     * Scores the agents' opinions that have come due, before the close review runs, so the review sees
+     * today's results. Needs the day's bars, which the universe job has just topped up.
+     */
+    @Scheduled(cron = "${astron.ashare.job.signal-cron:0 25 15 * * MON-FRI}", zone = "Asia/Shanghai")
+    public void evaluateSignals() {
+        locked("signals", 600, () -> {
+            if (!paperTradingService.afterCloseOnTradingDay()) {
+                return;
+            }
+            forEachAccount("signals", (uid, account) -> {
+                var r = signalService.evaluateDue(uid);
+                if (r.getIntValue("hit") + r.getIntValue("miss") + r.getIntValue("unable") > 0) {
+                    signalService.recordStatsLesson(uid);
+                }
+            });
         });
     }
 

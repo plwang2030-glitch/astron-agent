@@ -40,6 +40,61 @@ public final class TradingClock {
         return (!t.isBefore(OPEN) && t.isBefore(MORNING_CLOSE)) || (!t.isBefore(AFTERNOON_OPEN) && t.isBefore(CLOSE));
     }
 
+    /**
+     * Where the clock is in the trading day. Conclusions that are safe to state depend on this: before
+     * the open today's move has not happened yet, and during trading today's bar is not final.
+     */
+    public enum Phase {
+
+        /** A trading day before 09:30 (includes the opening call auction). */
+        PRE_OPEN("盘前", "今天还没开盘：只能基于上一个完整交易日、隔夜消息和集合竞价，不能把尚未发生的今日走势写成事实，应给出开盘计划和触发条件"),
+        /** 09:30–11:30 and 13:00–15:00. */
+        INTRADAY("盘中", "当前处于交易时段：今日 K 线和指标都是未收盘数据，可能反转；结论要写成实时状态和观察条件，不要写成「今日收盘后」「今天收出」"),
+        /** The lunch break of a trading day. */
+        LUNCH_BREAK("午间休市", "上午已收盘、下午未开盘：可用上午的走势，但今日 K 线仍未定型，不要写成全天结论"),
+        /** 15:00 and later on a trading day. */
+        AFTER_CLOSE("盘后", "今天已收盘：可以使用完整的当日数据做复盘和次日计划"),
+        /** A weekend or holiday. */
+        NON_TRADING("非交易日", "今天不是交易日：使用最近一个交易日的数据，不要描述「今日」行情");
+
+        private final String label;
+        private final String rule;
+
+        Phase(String label, String rule) {
+            this.label = label;
+            this.rule = rule;
+        }
+
+        public String label() {
+            return label;
+        }
+
+        /** What the agent may and may not claim in this phase. */
+        public String rule() {
+            return rule;
+        }
+
+        /** Today's daily bar is final (safe to describe as the day's result). */
+        public boolean dayComplete() {
+            return this == AFTER_CLOSE;
+        }
+    }
+
+    /** The phase at {@code now}; {@code tradingDay} says whether that date is a trading day. */
+    public static Phase phase(LocalDateTime when, boolean tradingDay) {
+        if (!tradingDay) {
+            return Phase.NON_TRADING;
+        }
+        LocalTime t = when.toLocalTime();
+        if (t.isBefore(OPEN)) {
+            return Phase.PRE_OPEN;
+        }
+        if (!t.isBefore(CLOSE)) {
+            return Phase.AFTER_CLOSE;
+        }
+        return inContinuousSession(t) ? Phase.INTRADAY : Phase.LUNCH_BREAK;
+    }
+
     /** Placed during the trading hours of a trading day (including the lunch break): valid that day. */
     public static boolean placedIntraday(LocalDateTime placedAt, Collection<LocalDate> calendar) {
         LocalTime t = placedAt.toLocalTime();

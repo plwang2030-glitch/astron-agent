@@ -16,6 +16,8 @@ import com.iflytek.astron.console.hub.service.ashare.AShareReviewService;
 import com.iflytek.astron.console.hub.service.ashare.LessonService;
 import com.iflytek.astron.console.hub.service.ashare.PaperTradingService;
 import com.iflytek.astron.console.hub.service.ashare.StrategyParams;
+import com.iflytek.astron.console.hub.service.ashare.DecisionSignalService;
+import com.iflytek.astron.console.hub.service.ashare.MarketPackService;
 import com.iflytek.astron.console.hub.service.ashare.StrategyService;
 import com.iflytek.astron.console.hub.service.ashare.UniverseService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -50,6 +52,8 @@ public class AShareController {
     private final StrategyService strategyService;
     private final AShareReviewService reviewService;
     private final UniverseService universeService;
+    private final DecisionSignalService signalService;
+    private final MarketPackService packService;
 
     @GetMapping("/overview")
     @Operation(summary = "Account value, positions, pending orders and performance")
@@ -162,6 +166,35 @@ public class AShareController {
         return guarded(() -> paperTradingService.importPosition(uid, form.getCode(), form.getQty(), form.getAvgCost(),
                 StringUtils.isBlank(form.getBuyDate()) ? null : java.time.LocalDate.parse(form.getBuyDate()),
                 form.getNote()));
+    }
+
+    @GetMapping("/signals")
+    @Operation(summary = "The agents' recorded opinions and how they turned out")
+    public ApiResult<JSONObject> signals(@RequestParam(required = false) String status,
+            @RequestParam(required = false) String code) {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> new JSONObject()
+                .fluentPut("stats", signalService.stats(uid))
+                .fluentPut("signals", signalService.list(uid, status, code, 50)));
+    }
+
+    @PostMapping("/signals/evaluate")
+    @Operation(summary = "Score the opinions whose window has passed now")
+    public ApiResult<JSONObject> evaluateSignals() {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> {
+            JSONObject r = signalService.evaluateDue(uid);
+            if (r.getIntValue("hit") + r.getIntValue("miss") + r.getIntValue("unable") > 0) {
+                signalService.recordStatsLesson(uid);
+            }
+            return r;
+        });
+    }
+
+    @GetMapping("/market")
+    @Operation(summary = "Market state: indices, breadth, leading sectors and data quality")
+    public ApiResult<JSONObject> marketOverview() {
+        return guarded(() -> packService.overview().toJson());
     }
 
     @GetMapping("/watchlist")

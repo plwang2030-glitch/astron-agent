@@ -366,3 +366,141 @@ export async function removeAShareWatch(
 ): Promise<AShareWatchlist> {
   return await http.post('/a-share/watchlist/remove', { code });
 }
+
+/** 智能体建议的动作 */
+export type AShareSignalAction =
+  | 'BUY'
+  | 'ADD'
+  | 'HOLD'
+  | 'WATCH'
+  | 'REDUCE'
+  | 'SELL'
+  | 'AVOID'
+  | 'ALERT';
+
+export interface AShareSignal {
+  signalId: number;
+  code: string;
+  name?: string;
+  action: AShareSignalAction;
+  /** 评估周期（交易日）：1d / 3d / 5d / 10d */
+  horizon: string;
+  confidence?: number;
+  entryLow?: number;
+  entryHigh?: number;
+  stopLoss?: number;
+  targetPrice?: number;
+  reason?: string;
+  risk?: string;
+  watch?: string;
+  source: 'AGENT' | 'REVIEW';
+  marketPhase?: string;
+  dataQuality?: 'GOOD' | 'FAIR' | 'POOR';
+  planQuality?: 'COMPLETE' | 'PARTIAL' | 'MINIMAL';
+  /** 评估锚定的交易日与前复权收盘价 */
+  anchorDate?: string;
+  anchorPrice?: number;
+  status: 'PENDING' | 'HIT' | 'MISS' | 'UNABLE' | 'SUPERSEDED';
+  createTime: string;
+  outcome?: {
+    result: 'HIT' | 'MISS' | 'UNABLE';
+    endDate?: string;
+    endPrice?: number;
+    returnPct?: number;
+    maxAdversePct?: number;
+    detail?: string;
+  };
+}
+
+export interface AShareSignalGroup {
+  key?: string;
+  samples: number;
+  hits: number;
+  /** 样本是否达到可下结论的下限 */
+  enough: boolean;
+  hitRatePct?: number;
+  avgReturnPct?: number;
+  avgMaxAdversePct?: number;
+  note?: string;
+}
+
+export interface AShareSignalStats {
+  evaluated: number;
+  unable: number;
+  pending: number;
+  minSample: number;
+  rule: string;
+  overall: AShareSignalGroup;
+  byAction: AShareSignalGroup[];
+  byHorizon: AShareSignalGroup[];
+  byMarketPhase: AShareSignalGroup[];
+  bySource: AShareSignalGroup[];
+  byDataQuality: AShareSignalGroup[];
+  byPlanQuality: AShareSignalGroup[];
+}
+
+export interface AShareSignalsResponse {
+  stats: AShareSignalStats;
+  signals: AShareSignal[];
+}
+
+export async function getAShareSignals(
+  status?: string
+): Promise<AShareSignalsResponse> {
+  return await http.get('/a-share/signals', { params: { status } });
+}
+
+export async function evaluateAShareSignals(): Promise<{
+  pending: number;
+  hit: number;
+  miss: number;
+  unable: number;
+  waiting: number;
+}> {
+  return await http.post('/a-share/signals/evaluate');
+}
+
+/** 某个数据块的可用情况 */
+export type AShareBlockStatus =
+  | 'FRESH'
+  | 'STALE'
+  | 'MISSING'
+  | 'FETCH_FAILED'
+  | 'NOT_SUPPORTED';
+
+export interface AShareDataQuality {
+  score: number;
+  level: 'GOOD' | 'FAIR' | 'POOR';
+  levelLabel: string;
+  blocks: Record<string, AShareBlockStatus>;
+  limitations: string[];
+}
+
+export interface AShareMarketOverview {
+  indices: {
+    name: string;
+    price?: number;
+    pctChg?: number;
+    amountYi?: number;
+  }[];
+  breadth?: {
+    date?: string;
+    advances?: number;
+    declines?: number;
+    unchanged?: number;
+    limitUp?: number;
+    limitDown?: number;
+    brokenLimitUp?: number;
+  };
+  industryLeaders?: { name: string; members: number; pctChg: number }[];
+  industryLaggards?: { name: string; members: number; pctChg: number }[];
+  hotConcepts?: { name: string; members: number; pctChg: number }[];
+  marketPhase: string;
+  marketPhaseLabel: string;
+  rule: string;
+  dataQuality: AShareDataQuality;
+}
+
+export async function getAShareMarket(): Promise<AShareMarketOverview> {
+  return await http.get('/a-share/market');
+}

@@ -481,7 +481,7 @@ public class EastmoneyClient {
     }
 
     /** GET of a JSON array (Sina returns a bare array). */
-    private JSONArray getArray(HttpUrl url, String referer) {
+    JSONArray getArray(HttpUrl url, String referer) {
         pace(provider(url.host()));
         Request request = new Request.Builder()
                 .url(url)
@@ -595,7 +595,7 @@ public class EastmoneyClient {
     private final Map<String, Long> lastRequestAt = new ConcurrentHashMap<>();
 
     /** Waits until {@link #MIN_GAP_MS} has passed since the provider's previous request. */
-    private void pace(String provider) {
+    void pace(String provider) {
         long wait;
         synchronized (lastRequestAt) {
             long now = System.currentTimeMillis();
@@ -622,7 +622,7 @@ public class EastmoneyClient {
      * GET with the first host of {@code pool} that answers ({@code null} pool: the URL's host); when
      * every host fails, one more round after a short backoff.
      */
-    private JSONObject get(HttpUrl url, HostPool pool) {
+    JSONObject get(HttpUrl url, HostPool pool) {
         List<String> hosts = pool == null ? List.of(url.host()) : pool.order();
         AShareDataException last = null;
         for (int round = 0; round < 2; round++) {
@@ -648,6 +648,30 @@ public class EastmoneyClient {
             }
         }
         throw last == null ? new AShareDataException("行情接口不可用") : last;
+    }
+
+    /** GET of a text body (JavaScript or GBK pages); {@code null} charset means UTF-8. */
+    String getText(HttpUrl url, String referer, java.nio.charset.Charset charset) {
+        pace(provider(url.host()));
+        Request request = new Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+                .header("Referer", StringUtils.defaultIfBlank(referer, "https://quote.eastmoney.com/"))
+                .get()
+                .build();
+        try (Response response = http.newCall(request).execute()) {
+            ResponseBody body = response.body();
+            if (!response.isSuccessful() || body == null) {
+                throw new AShareDataException("接口返回 " + response.code());
+            }
+            byte[] bytes = body.bytes();
+            return new String(bytes, charset == null ? java.nio.charset.StandardCharsets.UTF_8 : charset);
+        } catch (IOException e) {
+            log.warn("Market text request error, host={}, path={}, errorType={}", url.host(), url.encodedPath(),
+                    e.getClass().getSimpleName());
+            throw new AShareDataException("接口连接失败：" + e.getClass().getSimpleName());
+        }
     }
 
     private JSONObject getOnce(HttpUrl url) {
@@ -682,7 +706,7 @@ public class EastmoneyClient {
     }
 
     @SuppressWarnings("unchecked")
-    private <T> T cached(String key, long ttlMillis, Supplier<T> loader) {
+    <T> T cached(String key, long ttlMillis, Supplier<T> loader) {
         long now = System.currentTimeMillis();
         Cached hit = cache.get(key);
         if (hit != null && hit.expiresAt() > now) {

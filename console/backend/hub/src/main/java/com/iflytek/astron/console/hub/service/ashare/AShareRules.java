@@ -73,6 +73,12 @@ public final class AShareRules {
         throw new IllegalArgumentException("只支持沪深 A 股（主板 / 创业板 / 科创板），不支持：" + c);
     }
 
+    /** Sina / Tencent symbol: {@code sh600036}, {@code sz000333}. */
+    public static String sinaSymbol(String code) {
+        Board b = board(code);
+        return (b == Board.SH_MAIN || b == Board.STAR ? "sh" : "sz") + code;
+    }
+
     /** Eastmoney security id: {@code 1.} Shanghai, {@code 0.} Shenzhen. */
     public static String secid(String code) {
         Board b = board(code);
