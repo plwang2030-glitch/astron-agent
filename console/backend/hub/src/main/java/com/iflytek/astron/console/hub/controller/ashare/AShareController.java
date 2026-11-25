@@ -104,6 +104,23 @@ public class AShareController {
         return guarded(() -> JSONObject.from(lessonService.retire(uid, form.getId())).fluentPut("uid", null));
     }
 
+    @PostMapping("/lessons/note")
+    @Operation(summary = "Write a finding into the lesson book as an evolution record")
+    public ApiResult<JSONObject> addNote(@RequestBody NoteForm form) {
+        String uid = RequestContextUtil.getUID();
+        return guarded(() -> {
+            String content = StringUtils.trimToEmpty(form.getContent());
+            if (content.length() < 10) {
+                throw new IllegalArgumentException("content 至少 10 字");
+            }
+            String tags = StringUtils.isBlank(form.getTags()) ? "MANUAL_NOTE"
+                    : "MANUAL_NOTE," + form.getTags().trim();
+            lessonService.recordMeta(uid, content, null, tags);
+            log.info("Lesson note recorded, uid={}, tags={}, chars={}", uid, tags, content.length());
+            return new JSONObject().fluentPut("recorded", true).fluentPut("tags", tags);
+        });
+    }
+
     @GetMapping("/strategy")
     @Operation(summary = "Active strategy and version history")
     public ApiResult<JSONObject> strategy() {
@@ -322,6 +339,13 @@ public class AShareController {
         private Boolean autoTrade;
         private Integer reviewBotId;
         private Boolean watchlistAutoTrade;
+    }
+
+    @Data
+    public static class NoteForm {
+        private String content;
+        /** Extra comma-separated markers; MANUAL_NOTE is always added. */
+        private String tags;
     }
 
     @Data
