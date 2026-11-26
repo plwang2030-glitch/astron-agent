@@ -73,6 +73,19 @@ public final class AShareRules {
         throw new IllegalArgumentException("只支持沪深 A 股（主板 / 创业板 / 科创板），不支持：" + c);
     }
 
+    /**
+     * Sina / Tencent symbol derived from an Eastmoney security id. The id carries the exchange
+     * ({@code 1.} Shanghai, {@code 0.} Shenzhen), which the code alone does not: 000300 is the CSI 300
+     * index on the Shanghai feed, while a code starting 000 would otherwise be read as Shenzhen.
+     */
+    public static String symbolOfSecid(String secid) {
+        int dot = StringUtils.indexOf(secid, '.');
+        if (dot <= 0 || dot + 1 >= StringUtils.length(secid)) {
+            throw new IllegalArgumentException("证券 id 格式应为 1.600036 或 0.000333：" + secid);
+        }
+        return ("1".equals(secid.substring(0, dot)) ? "sh" : "sz") + secid.substring(dot + 1);
+    }
+
     /** Sina / Tencent symbol: {@code sh600036}, {@code sz000333}. */
     public static String sinaSymbol(String code) {
         Board b = board(code);

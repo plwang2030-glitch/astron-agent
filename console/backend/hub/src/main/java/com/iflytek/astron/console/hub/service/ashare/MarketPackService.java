@@ -38,6 +38,7 @@ public class MarketPackService {
     private final EastmoneyClient market;
     private final MarketExtras extras;
     private final BarStore barStore;
+    private final SourceHealth sources;
 
     /** One stock's full picture plus the quality of the data behind it. */
     public record StockPack(String code, String name, Quote quote, Series series, List<FlowDay> flow, Boards boards,
@@ -119,7 +120,7 @@ public class MarketPackService {
 
     /** The market's own state: indices, breadth and the leading / lagging sectors. */
     public record MarketPack(JSONArray indices, Breadth breadth, List<Sector> industries, List<Sector> concepts,
-            DataQuality quality, TradingClock.Phase phase) {
+            DataQuality quality, TradingClock.Phase phase, JSONObject sourceHealth) {
 
         public JSONObject toJson() {
             JSONObject out = new JSONObject()
@@ -127,7 +128,8 @@ public class MarketPackService {
                     .fluentPut("marketPhase", phase.name())
                     .fluentPut("marketPhaseLabel", phase.label())
                     .fluentPut("rule", phase.rule())
-                    .fluentPut("dataQuality", quality.toJson());
+                    .fluentPut("dataQuality", quality.toJson())
+                    .fluentPut("sources", sourceHealth);
             if (breadth != null) {
                 out.put("breadth", breadth.toJson());
             }
@@ -295,7 +297,7 @@ public class MarketPackService {
         boolean hasSectors = MarketExtras.describeSectors(industries, 1) != null;
         quality.put(DataQuality.Block.NEWS, hasSectors ? DataQuality.Status.FRESH : DataQuality.Status.MISSING,
                 hasSectors ? null : phase == TradingClock.Phase.PRE_OPEN ? "盘前板块涨跌幅为 0" : "板块排行取不到");
-        return new MarketPack(indices, breadth, industries, concepts, quality, phase);
+        return new MarketPack(indices, breadth, industries, concepts, quality, phase, sources.health());
     }
 
     /** Major indices by Eastmoney security id. */

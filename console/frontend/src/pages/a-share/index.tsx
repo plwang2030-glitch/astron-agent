@@ -135,6 +135,12 @@ const SIGNAL_STATUS: Record<string, { text: string; color: string }> = {
   SUPERSEDED: { text: '已被覆盖', color: 'default' },
 };
 
+const SOURCE_LABEL: Record<string, string> = {
+  eastmoney: '东方财富',
+  tencent: '腾讯',
+  sina: '新浪',
+};
+
 const QUALITY_LABEL: Record<string, string> = {
   GOOD: '好',
   FAIR: '一般',
@@ -1730,7 +1736,25 @@ const AShareTradingPage = (): React.ReactElement => {
         className="mb-4"
         type="warning"
         showIcon
-        message="仅为模拟交易与学习研究，不构成投资建议。行情来自东方财富公开接口，日 K 线在东方财富不可用时改用腾讯公开接口（均非官方，可能变化或中断）。"
+        message={
+          <span>
+            仅为模拟交易与学习研究，不构成投资建议。行情依次尝试东方财富、腾讯、新浪三个免费公开接口（均非官方，可能变化或中断），某一个失败会自动切换；前复权日
+            K 线只有东方财富和腾讯提供。
+            {marketOverview?.sources?.serving && (
+              <span className="ml-1 text-[#6b7280]">
+                当前实时报价来自{' '}
+                {SOURCE_LABEL[marketOverview.sources.serving.quote ?? ''] ??
+                  marketOverview.sources.serving.quote ??
+                  '—'}
+                {(marketOverview.sources.sources || []).some(x => x.cooling) &&
+                  `；暂时搁置：${(marketOverview.sources.sources || [])
+                    .filter(x => x.cooling)
+                    .map(x => SOURCE_LABEL[x.source] ?? x.source)
+                    .join('、')}`}
+              </span>
+            )}
+          </span>
+        }
       />
       {error && (
         <Alert className="mb-4" type="error" showIcon message={error} />

@@ -32,6 +32,15 @@ import java.util.function.Supplier;
  * {@link AShareDataException} and results are cached briefly.
  */
 @Slf4j
+/**
+ * A-share market data from several free public endpoints, tried in turn so that one going down does
+ * not stop trading: Eastmoney first, then Tencent, then Sina. {@link SourceHealth} remembers which
+ * one answered and sets aside a provider that keeps failing. The class name is historical; it is no
+ * longer Eastmoney-only.
+ * <p>
+ * The forward-adjusted series that signals and backtests use is only available from Eastmoney and
+ * Tencent, so Sina is offered for actual prices and the trading calendar only.
+ */
 @Component
 public class EastmoneyClient {
 
@@ -47,9 +56,14 @@ public class EastmoneyClient {
             .readTimeout(Duration.ofSeconds(8))
             .build();
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
-    /** Eastmoney K-line requests are skipped until then (Tencent is used instead). */
-    private volatile long eastmoneyKlineDownUntil;
-    private static final long KLINE_FALLBACK_MILLIS = 5 * 60_000L;
+    /**
+     * Set after construction: SinaMarket needs this class for its HTTP, so the two refer to each other.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private SourceHealth sources;
+    @org.springframework.context.annotation.Lazy
+    @org.springframework.beans.factory.annotation.Autowired
+    private SinaMarket sina;
 
     private record Cached(Object value, long expiresAt) {}
 
@@ -120,7 +134,14 @@ public class EastmoneyClient {
 
     /** Quote by Eastmoney security id, e.g. {@code 1.000001} for an index. */
     public Quote quoteBySecid(String secid) {
-        return cached("q:" + secid, 3_000, () -> {
+        return cached("q:" + secid, 3_000, () -> sources.fetch("quote", List.of(
+                new SourceHealth.Source<>("eastmoney", () -> eastmoneyQuote(secid)),
+                new SourceHealth.Source<>("tencent", () -> tencentQuote(secid)),
+                new SourceHealth.Source<>("sina", () -> sina.quote(secid)))));
+    }
+
+    private Quote eastmoneyQuote(String secid) {
+        {
             HttpUrl url = HttpUrl.parse("https://push2.eastmoney.com/api/qt/stock/get")
                     .newBuilder()
                     .addQueryParameter("secid", secid)
@@ -129,16 +150,7 @@ public class EastmoneyClient {
                     .addQueryParameter("invt", "2")
                     .addQueryParameter("fields", QUOTE_FIELDS)
                     .build();
-            JSONObject data;
-            try {
-                data = get(url, quoteHosts).getJSONObject("data");
-            } catch (AShareDataException e) {
-                // Orders are priced from this call, so one provider being unreachable must not stop a
-                // stop loss or a scheduled exit: on 2026-11-25 every Eastmoney quote host refused
-                // connections at 14:50 and a sell was skipped. Tencent carries the prices we need.
-                log.warn("Eastmoney quote unavailable, trying Tencent, secid={}, msg={}", secid, e.getMessage());
-                return tencentQuote(secid);
-            }
+            JSONObject data = get(url, quoteHosts).getJSONObject("data");
             if (data == null || StringUtils.isBlank(data.getString("f57"))) {
                 throw new AShareDataException("没有查到行情：" + secid);
             }
@@ -146,7 +158,7 @@ public class EastmoneyClient {
                     num(data, "f44"), num(data, "f45"), num(data, "f60"), num(data, "f169"), num(data, "f170"),
                     num(data, "f47"), num(data, "f48"), num(data, "f116"), num(data, "f117"), num(data, "f162"),
                     num(data, "f167"), num(data, "f168"), quoteTime(data));
-        });
+        }
     }
 
     /**
@@ -156,9 +168,8 @@ public class EastmoneyClient {
      */
     private Quote tencentQuote(String secid) {
         String code = secid.substring(secid.indexOf('.') + 1);
-        String symbol = CALENDAR_SECID.equals(secid) ? "sh" + code : AShareRules.sinaSymbol(code);
-        String text = getText(HttpUrl.parse("https://qt.gtimg.cn/q=" + symbol), "https://gu.qq.com/",
-                java.nio.charset.Charset.forName("GBK"));
+        String text = getText(HttpUrl.parse("https://qt.gtimg.cn/q=" + AShareRules.symbolOfSecid(secid)),
+                "https://gu.qq.com/", java.nio.charset.Charset.forName("GBK"));
         LiveQuote q = parseTencentQuotes(text).get(code);
         if (q == null || q.price() == null) {
             throw new AShareDataException("没有查到行情：" + secid + "（东方财富和腾讯都取不到）");
@@ -203,25 +214,15 @@ public class EastmoneyClient {
     }
 
     private Series loadBars(String secid, boolean adjusted, int lmt) {
-        {
-            if (System.currentTimeMillis() < eastmoneyKlineDownUntil) {
-                return tencentBars(secid, adjusted, lmt);
-            }
-            try {
-                return eastmoneyBars(secid, adjusted, lmt);
-            } catch (AShareDataException e) {
-                // Eastmoney's K-line servers sometimes refuse every connection for a while; use Tencent's
-                // public K-line endpoint meanwhile and retry Eastmoney later.
-                eastmoneyKlineDownUntil = System.currentTimeMillis() + KLINE_FALLBACK_MILLIS;
-                log.warn("Eastmoney K-line unavailable, falling back to Tencent for {} min, secid={}, msg={}",
-                        KLINE_FALLBACK_MILLIS / 60_000, secid, e.getMessage());
-                try {
-                    return tencentBars(secid, adjusted, lmt);
-                } catch (AShareDataException fallback) {
-                    throw e;
-                }
-            }
+        List<SourceHealth.Source<Series>> providers = new ArrayList<>();
+        providers.add(new SourceHealth.Source<>("eastmoney", () -> eastmoneyBars(secid, adjusted, lmt)));
+        providers.add(new SourceHealth.Source<>("tencent", () -> tencentBars(secid, adjusted, lmt)));
+        if (!adjusted) {
+            // Sina publishes actual prices only. Offering it for the adjusted series would silently
+            // change what every moving average and backtest means, so it is left out of that list.
+            providers.add(new SourceHealth.Source<>("sina", () -> sina.bars(secid, false, lmt)));
         }
+        return sources.fetch(adjusted ? "kline-adjusted" : "kline", providers);
     }
 
     private Series eastmoneyBars(String secid, boolean adjusted, int lmt) {

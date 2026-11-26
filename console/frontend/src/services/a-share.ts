@@ -499,6 +499,21 @@ export interface AShareMarketOverview {
   marketPhaseLabel: string;
   rule: string;
   dataQuality: AShareDataQuality;
+  /** 各免费数据源的可用情况，以及当前在用哪个 */
+  sources?: {
+    sources: {
+      source: string;
+      cooling: boolean;
+      coolingSeconds: number;
+      successes: number;
+      failures: number;
+      lastSuccess?: string;
+      lastError?: string;
+    }[];
+    serving: Record<string, string>;
+    cooldownMinutes: number;
+    note: string;
+  };
 }
 
 export async function getAShareMarket(): Promise<AShareMarketOverview> {

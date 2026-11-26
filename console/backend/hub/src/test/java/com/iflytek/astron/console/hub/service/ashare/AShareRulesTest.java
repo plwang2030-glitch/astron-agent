@@ -80,4 +80,20 @@ class AShareRulesTest {
         assertEquals(new BigDecimal("50.00"), sell.stamp());
         assertEquals(new BigDecimal("76.00"), sell.total());
     }
+
+    @Test
+    void symbolComesFromTheExchangeInTheSecurityId() {
+        // The code alone is ambiguous: 000300 is the CSI 300 on the Shanghai feed, while a 000 code
+        // would otherwise be read as Shenzhen. Getting this wrong made the quote fallbacks ask for a
+        // stock that does not exist.
+        assertEquals("sh000300", AShareRules.symbolOfSecid("1.000300"));
+        assertEquals("sh000001", AShareRules.symbolOfSecid("1.000001"));
+        assertEquals("sz000001", AShareRules.symbolOfSecid("0.000001"));
+        assertEquals("sh600036", AShareRules.symbolOfSecid("1.600036"));
+        assertEquals("sz002281", AShareRules.symbolOfSecid("0.002281"));
+        assertEquals("sz399001", AShareRules.symbolOfSecid("0.399001"));
+        assertThrows(IllegalArgumentException.class, () -> AShareRules.symbolOfSecid("600036"));
+        assertThrows(IllegalArgumentException.class, () -> AShareRules.symbolOfSecid("1."));
+        assertThrows(IllegalArgumentException.class, () -> AShareRules.symbolOfSecid(null));
+    }
 }
